@@ -87,7 +87,7 @@ struct Label
 typedef struct L_list L_list;
 struct L_list
 {
-    Label *element;
+    Label *current;
     L_list *previous;
     L_list *next;
 };
@@ -96,7 +96,7 @@ struct L_list
 extern int time_interval;
 extern double speed;
 extern double travel_time_penalty;
-extern int horizon;
+extern int horizon; // total no of time intervals
 extern int num_activities;
 extern L_list **bucket;
 extern Activity *activities;

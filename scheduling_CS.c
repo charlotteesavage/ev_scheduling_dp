@@ -156,16 +156,16 @@ static void initialize_charge_rates() // initialise these rates per eqn (39) in 
 
 static double distance_x(Activity *a1, Activity *a2) // this will change as we will just reference a skim matrix
 {
-    // Distance en metres
+    // Distance in metres
     double dx = (double)(a2->x - a1->x);
     double dy = (double)(a2->y - a1->y);
     double dist = sqrt(dx * dx + dy * dy);
     return dist;
 };
 
-static int travel_time(Activity *a1, Activity *a2) // think this will change too
+static int travel_time(Activity *a1, Activity *a2)
 {                                                  // search TAG for reference speeds for urban traffic, cited value of why you're using a partiular speed
-    double dist = distance_x(a1, a2);
+    double dist = distance_x(a1, a2);              // this will change too
     int time = (int)(dist / speed);
     time = (int)(ceil((double)time / time_interval) * time_interval); // Round down to the nearest 5-minute interval
     int travel_time_horizon = time / time_interval;                   // Divide by 5 to fit within the 0-289 time horizon
@@ -263,7 +263,7 @@ void create_bucket(int a, int b)
         bucket[i] = (L_list *)malloc(b * sizeof(L_list)); // For each of those pointers, it allocates memory for b L_list objects
         for (int j = 0; j < b; j++)
         { // It then initializes the properties of each L_list to NULL.
-            bucket[i][j].element = NULL;
+            bucket[i][j].current = NULL;
             bucket[i][j].previous = NULL;
             bucket[i][j].next = NULL;
         }
@@ -291,14 +291,14 @@ static void delete_list(L_list *L)
         delete_list(L->next);
     }
     // checks if the L_list has a Label (L->element) associated with it. If so, it frees the memory of any Group_mem of the Label too
-    if (L->element != NULL)
+    if (L->current != NULL)
     {
-        if (L->element->mem != NULL)
+        if (L->current->mem != NULL)
         {
-            delete_group(L->element->mem);
+            delete_group(L->current->mem);
         }
-        free(L->element);
-        L->element = NULL;
+        free(L->current);
+        L->current = NULL;
     }
 };
 
@@ -414,8 +414,8 @@ static Group_mem *unionLinkedLists(Group_mem *head1, Group_mem *head2, int pipi)
 /* Removes the label from the provided list of label and adjusts the connections of adjacent labels. */
 static L_list *remove_label(L_list *L)
 {
-    free(L->element);
-    L->element = NULL;
+    free(L->current);
+    L->current = NULL;
     L_list *L_re;
     if (L->previous != NULL && L->next != NULL)
     {
@@ -439,7 +439,7 @@ static L_list *remove_label(L_list *L)
             L->next->next->previous = L;
         }
         L_re = L->next;
-        L->element = L_re->element;
+        L->current = L_re->current;
         L->next = L->next->next;
         free(L_re);
         return L; // return L which has taken the values of L->next.
@@ -554,7 +554,13 @@ static int dom_mem_contains(Label *L1, Label *L2)
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /*  Determines if an Activity a can be added to a sequence ending in label L.
-    It returns 1 if it's feasible and 0 if it's not. */
+    It returns 1 if it's feasible and 0 if it's not. 
+    Note - a is the considered activity, but does not yet have fixed duration 
+    or charging participation. 
+    As such, most constraints apply to the considered activity, a, except for 
+    duration and charging-based constraints which must be applied to L
+    */
+
 static int is_feasible(Label *L, Activity *a)
 {
     if (L == NULL)
@@ -580,7 +586,7 @@ static int is_feasible(Label *L, Activity *a)
         { // Verifying the minimum duration of the current activity
             return 0;
         }
-        // temps actuel + trajet pour a + duree min de a + trajet de a a home > fin de journee
+        // current time + travel_time for a + min duration for a + time for returning home > end of horizon
         // Ie enough time left in the horizon to add this activity
         if (L->time + travel_time(L->act, a) + a->min_duration + travel_time(a, &activities[num_activities - 1]) >= horizon - 1)
         {
@@ -591,45 +597,78 @@ static int is_feasible(Label *L, Activity *a)
         {
             return 0;
         }
+        // if current time + travel time to next activity is less than the latest possible start time of the next activity,
+        // not allowed
         if (L->time + travel_time(L->act, a) > a->latest_start)
         {
             return 0;
         }
+        // if we have already done this particular activity
         if (mem_contains(L, a))
         {
             // printf("\n mem_contains = %d", mem_contains(L,a));
             return 0;
         }
         if (L->soc < 0) // constraint 25
-        {
+        {               // need a positive SOC at all times
             return 0;
         }
-        //
-        if (L->soc + L->delta_soc > soc_full) // constraint 26
+
+        // EV SOC related:
+        double charge_needed = energy_consumed_soc(L->act, a); // for use in constraint 27 - charge_needed
+
+        if (L->is_charging)
+        {
+            if (L->charge_duration <= 0)
+            {
+                return 0;
+            }
+            if (!L->act->can_charge) // constraint 35
+            {
+                return 0;
+            }
+
+            // if (L->soc + L->delta_soc > soc_full) // constraint 26
+            // {                                     // need that during a recharge, the battery capacity does not go above the full capacity pf the battery
+            //     return 0;
+            // }
+
+            // if (L->soc + L->delta_soc < charge_needed) // constraint 27
+            // {                                                    // need that the change in SOC during charging must not be less than the SOC needed to cover the next trip (to activity a)
+            //     return 0;
+            // }
+        }
+
+        if (L->charge_duration > L->act->max_duration) // constraint 31
+        // check this - shoudl this relate to current activity or next activity? Or both?
         {
             return 0;
         }
 
-        double potential_energy_needed = energy_consumed_soc(L->act, a);
+        if (a->is_service_station)
 
-        if (L->soc + L->delta_soc < potential_energy_needed) // constraint 27
         {
-            return 0;
+            if (!L->is_charging) // constraint 33
+            {
+                return 0;
+            }
+            // if (!L->act->max_duration <= L->charge_duration) // constraint 34
+            // {
+            //     return 0;
+            // }
         }
 
-        if (L->charge_duration > a->max_duration) // check this if it is enough
+        else if (!L->is_charging)
         {
-            return 0;
-        }
+            if (L->soc < charge_needed)
+            {
+                return 0;
+            }
 
-        if (L->is_charging == 0 && L->charge_duration < 0)
-        {
-            return 0;
-        }
-
-        if (a->is_service_station && !L->is_charging)
-        {
-            return 0;
+            if (L->charge_duration > 0)
+            {
+                return 0;
+            }
         }
 
         // if(contains(L,a)){
@@ -650,7 +689,7 @@ static int is_feasible(Label *L, Activity *a)
             return 0;
         }
     }
-    return 1; // si tout va bien
+    return 1;
 };
 
 /*  checks if Label L1 dominates Label L2 based on certain criteria.
@@ -753,6 +792,8 @@ static double update_utility(Label *L)
     }
 
     // service station has no duration penalties, only penalties come from cost of charge
+    // where does home activity sit here?
+    // check signs again
 
     // DURATION UTILITY OF FINISHED ACTIVITY
     if ((group == 1) || (group == 6))
@@ -769,20 +810,25 @@ static double update_utility(Label *L)
     // time window constraints between 7am and 11pm, not allowed outside that
 
     // Charging utility terms
-    if ((group == 6))
+    if (group == 6)
     {
         L->utility += gamma_charge_work;
     }
     //-3.34, # -3.34home slow charging relative to not charging
 
+    else if (group == 0)
+    {
+        L->utility += gamma_charge_home;
+    }
     else
     {
         L->utility += gamma_charge_non_work;
     }
+
     // SOC𝑎 represents the state of charge after travel and at the start time of activity 𝑎.
     L->utility += theta_soc * fmax(0, soc_threshold - L->soc);
 
-    L->utility += beta_delta_soc * fmin(1 - previous_L->soc, L->delta_soc);
+    L->utility -= beta_delta_soc * fmin(1 - previous_L->soc, L->delta_soc);
 
     L->utility += beta_charge_cost * L->charge_cost;
 
@@ -894,11 +940,11 @@ Label *find_best(L_list *B, int o)
     while (li != NULL)
     {
         // printf("%s", "\n Hello there");
-        if (li->element != NULL)
+        if (li->current != NULL)
         {
-            if (li->element->utility < min)
+            if (li->current->utility < min)
             {
-                bestL = li->element;
+                bestL = li->current;
                 min = bestL->utility;
             }
         }
@@ -982,31 +1028,32 @@ void DP()
         printf(" BUCKET IS NULL %d", 0);
     }
 
-    Label *ll = create_label(&activities[0]); // Initialise label avec Dawn comme 1e activite
-    bucket[ll->time][0].element = ll;         // Stocke ce label comme premier element de la L_list du temps actuel et activite 0
+    Label *ll = create_label(&activities[0]); // Initialise label with Dawn as first activity
+    bucket[ll->time][0].current = ll;         // store this in the bucket structure
 
-    for (int h = ll->time; h < horizon - 1; h++)
-    { // pour tous les time horizons restant jusqu'a minuit
-        for (int a0 = 0; a0 < num_activities; a0++)
-        {                                  // pour toutes les activites
-            L_list *list = &bucket[h][a0]; // list = liste de labels au temps h et pour l'activite a0
+    for (int h = ll->time; h < horizon - 1; h++) // for all time intervals from 0 to 288 (horizon = 289, the number of 5 min intervals in a day)
+    { 
+        for (int act_index = 0; act_index < num_activities; act_index++) // for each activity in num_activities
+        {
+            L_list *list = &bucket[h][act_index]; // create a linked list, get all labels at state (h, act_index)
 
-            while (list != NULL)
+            while (list != NULL) // go through all the activities
             {
                 // int myBool = list!=NULL;
                 // printf("myBool: %s\n", myBool ? "true" : "false");
 
-                Label *L = list->element; // pour un certain label de la liste
+                Label *L = list->current; // for one of the labels in the list
 
                 for (int a1 = 0; a1 < num_activities; a1++)
-                { // pour toutes les activites
+                { // for all the activities
 
                     if (is_feasible(L, &activities[a1]))
-                    { // si pas feasible, passe directement au prochain a1
+                    { // if activity is not feasible, pass directly to the next activity
 
-                        Label *L1 = label_from_label_and_activity(L, &activities[a1]);
+                        Label *L1 = update_label_from_activity(L, &activities[a1]);
 
                         // But : garder le minimum de L_list pour le temps au nouveau label et l'activite a1
+                        // aim: keen the minimum value from L_list
                         int dom = 0;
                         L_list *list_1 = &bucket[L1->time][a1];
                         L_list *list_2 = &bucket[L1->time][a1];
@@ -1017,15 +1064,15 @@ void DP()
                             list_2 = list_1;
 
                             // If a label in the bucket is dominated by L1, this label is removed from the list (bucket)
-                            if (dominates(L1, list_1->element))
+                            if (dominates(L1, list_1->current))
                             {
                                 // printf("\n Dominance \n");
                                 list_1 = remove_label(list_1);
                             }
-                            // If L1 is dominated by a label in the bucket, no further comparaison is needed for L1 and it's discareded
+                            // If L1 is dominated by a label in the bucket, no further comparason is needed for L1 and it's discarded
                             else
                             {
-                                if (dominates(list_1->element, L1))
+                                if (dominates(list_1->current, L1))
                                 {
                                     // printf("\n Dominance \n");
                                     free(L1);
@@ -1039,14 +1086,14 @@ void DP()
                         // si L1 n'est domine par aucun des label de la list du bucket, il faut l'y rajouter
                         if (!dom)
                         {
-                            if (list_2->element == NULL)
+                            if (list_2->current == NULL)
                             {
-                                list_2->element = L1;
+                                list_2->current = L1;
                             }
                             else
                             { // juste rajoute un label a la fin d'une Label_list
                                 L_list *Ln = malloc(sizeof(L_list));
-                                Ln->element = L1;
+                                Ln->current = L1;
                                 list_2->next = Ln;
                                 Ln->next = NULL;
                                 Ln->previous = list_1;
