@@ -38,7 +38,7 @@ typedef struct Activity
 
     int slow_charging_available; // binary variable: 1 if available, 0 if higher vals available
     int fast_charging_available; // binary variable: 1 if available, 0 otherwise
-    int rapid_charging_available;
+    int rapid_charging_available; // binary variable: 1 if avail, 0 otherwise
 
     // double charging_price_slow;
     // double charging_price_fast;
@@ -153,8 +153,10 @@ extern int soc_full;
 // Initialization functions
 void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_penalty,
                             int pytime_interval, double *asc, double *early, double *late,
-                            double *longp, double *shortp, int pyflexible, int pymid_flex,
-                            int pynot_flex);
+                            double *longp, double *shortp
+                            // int pyflexible, int pymid_flex,
+                            // int pynot_flex
+);
 void set_activities(Activity *activities_data, int pynum_activities);
 void initialize_charge_rates(void);
 

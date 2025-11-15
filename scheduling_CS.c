@@ -62,7 +62,7 @@ double early_parameters[5];
 double late_parameters[5];
 double long_parameters[5];
 double short_parameters[5];
-int flex, mid_flex, not_flex; // how much deviation is allowed from the preferred schedule
+// int flex, mid_flex, not_flex; // how much deviation is allowed from the preferred schedule
 
 // new utility terms
 double gamma_charge_work = -3.59;     // inconvenience of charging at work activity
@@ -81,16 +81,17 @@ double get_total_time() { return total_time; }
 Label *get_final_schedule() { return final_schedule; }
 
 void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_penalty, int pytime_interval,
-                            double *asc, double *early, double *late, double *longp, double *shortp,
-                            int pyflexible, int pymid_flex, int pynot_flex)
+                            double *asc, double *early, double *late, double *longp, double *shortp
+                            // int pyflexible, int pymid_flex, int pynot_flex
+)
 {
     speed = pyspeed;
     travel_time_penalty = pytravel_time_penalty;
     horizon = pyhorizon;
     time_interval = pytime_interval;
-    flex = pyflexible;
-    mid_flex = pymid_flex;
-    not_flex = pynot_flex;
+    // flex = pyflexible;
+    // mid_flex = pymid_flex;
+    // not_flex = pynot_flex;
 
     // printf("speed = %f, travel_time_penalty = %f, curfew_time = %d, max_outside_time = %d, max_travel_time = %d, peak_hour_time1 = %d, peak_hour_time2 = %d, time_interval = %d\n",
     //         speed, travel_time_penalty, curfew_time, max_outside_time, max_travel_time, peak_hour_time1,
@@ -303,7 +304,7 @@ static void delete_list(L_list *L)
 };
 
 /*  frees up the memory occupied by the bucket
-    d'abord free la memory de chaque L_list componenent, then of the bucket itself */
+   first free the memory of every L_list componenent, then of the bucket itself */
 void free_bucket()
 {
     for (int i = 0; i < horizon; i++)
@@ -1029,20 +1030,22 @@ void DP()
     }
 
     Label *ll = create_label(&activities[0]); // Initialise label with Dawn as first activity
-    bucket[ll->time][0].current = ll;         // store this in the bucket structure
+    bucket[ll->time][0].current = ll;         // store this label in the first position bucket structure
 
     for (int h = ll->time; h < horizon - 1; h++) // for all time intervals from 0 to 288 (horizon = 289, the number of 5 min intervals in a day)
     { 
         for (int act_index = 0; act_index < num_activities; act_index++) // for each activity in num_activities
         {
-            L_list *list = &bucket[h][act_index]; // create a linked list, get all labels at state (h, act_index)
+            L_list *list = &bucket[h][act_index]; // create a linked list node,
+            // get all labels at state (h, act_index)
+            // create a linked list from the bucket entry at [h][act_index]
 
-            while (list != NULL) // go through all the activities
+            while (list != NULL) // for each label in the cell i.e. in the linked list
             {
                 // int myBool = list!=NULL;
                 // printf("myBool: %s\n", myBool ? "true" : "false");
 
-                Label *L = list->current; // for one of the labels in the list
+                Label *L = list->current; // for the current label in the l_list
 
                 for (int a1 = 0; a1 < num_activities; a1++)
                 { // for all the activities
@@ -1050,7 +1053,7 @@ void DP()
                     if (is_feasible(L, &activities[a1]))
                     { // if activity is not feasible, pass directly to the next activity
 
-                        Label *L1 = update_label_from_activity(L, &activities[a1]);
+                        Label *L1 = update_label_from_activity(L, &activities[a1]); // what would the label look like after this activity?
 
                         // But : garder le minimum de L_list pour le temps au nouveau label et l'activite a1
                         // aim: keen the minimum value from L_list
