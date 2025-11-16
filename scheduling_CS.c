@@ -264,7 +264,7 @@ void create_bucket(int a, int b)
         bucket[i] = (L_list *)malloc(b * sizeof(L_list)); // For each of those pointers, it allocates memory for b L_list objects
         for (int j = 0; j < b; j++)
         { // It then initializes the properties of each L_list to NULL.
-            bucket[i][j].current = NULL;
+            bucket[i][j].element = NULL;
             bucket[i][j].previous = NULL;
             bucket[i][j].next = NULL;
         }
@@ -292,14 +292,14 @@ static void delete_list(L_list *L)
         delete_list(L->next);
     }
     // checks if the L_list has a Label (L->element) associated with it. If so, it frees the memory of any Group_mem of the Label too
-    if (L->current != NULL)
+    if (L->element != NULL)
     {
-        if (L->current->mem != NULL)
+        if (L->element->mem != NULL)
         {
-            delete_group(L->current->mem);
+            delete_group(L->element->mem);
         }
-        free(L->current);
-        L->current = NULL;
+        free(L->element);
+        L->element = NULL;
     }
 };
 
@@ -415,8 +415,8 @@ static Group_mem *unionLinkedLists(Group_mem *head1, Group_mem *head2, int pipi)
 /* Removes the label from the provided list of label and adjusts the connections of adjacent labels. */
 static L_list *remove_label(L_list *L)
 {
-    free(L->current);
-    L->current = NULL;
+    free(L->element);
+    L->element = NULL;
     L_list *L_re;
     if (L->previous != NULL && L->next != NULL)
     {
@@ -440,7 +440,7 @@ static L_list *remove_label(L_list *L)
             L->next->next->previous = L;
         }
         L_re = L->next;
-        L->current = L_re->current;
+        L->element = L_re->element;
         L->next = L->next->next;
         free(L_re);
         return L; // return L which has taken the values of L->next.
@@ -694,10 +694,16 @@ static int is_feasible(Label *L, Activity *a)
 };
 
 /*  checks if Label L1 dominates Label L2 based on certain criteria.
-    Rappel : on minimise la utility function !
+    This aims to maximise the utility function
+
+    Without pruning, the number of labels explodes exponentially
+    Dominance identifies labels that are strictly worse than others and can be safely discarded
+    This is the key to computational efficiency
+
     0 = no dominance
     1 = L1 dominates by default because L2 is NULL
     2 = L1 dominates L2 based on the criteria */
+
 static int dominates(Label *L1, Label *L2)
 {
     if (L1 == NULL)
@@ -713,7 +719,7 @@ static int dominates(Label *L1, Label *L2)
         return 0;
     }
 
-    if (L1->utility <= L2->utility)
+    if (L1->utility >= L2->utility)
     { // L1 a une meilleure utility que L2
 
         // if(L1->time <= L2->time){
@@ -767,7 +773,7 @@ static double update_utility(Label *L)
 
     L->utility = previous_L->utility;
 
-    L->utility -= asc_parameters[group];
+    L->utility += asc_parameters[group];
     L->utility += travel_time_penalty * travel_time(previous_act, act);
 
     // time horizons differences are multiplied to be expressed in minutes from the parameters
@@ -829,7 +835,7 @@ static double update_utility(Label *L)
     // SOC𝑎 represents the state of charge after travel and at the start time of activity 𝑎.
     L->utility += theta_soc * fmax(0, soc_threshold - L->soc);
 
-    L->utility -= beta_delta_soc * fmin(1 - previous_L->soc, L->delta_soc);
+    L->utility += beta_delta_soc * fmin(1 - previous_L->soc, L->delta_soc);
 
     L->utility += beta_charge_cost * L->charge_cost;
 
@@ -931,22 +937,22 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
     return new_label;
 }
 
-/*  Finds the label with the minimum utility value from the list.
-    Returns the label with the minimum utility value. */
+/*  Finds the label with the max utility value from the list.
+    Returns the label with the max utility value. */
 Label *find_best(L_list *B, int o)
 {
-    double min = INFINITY;
+    double max = -INFINITY;
     Label *bestL = NULL;
     L_list *li = B;
     while (li != NULL)
     {
         // printf("%s", "\n Hello there");
-        if (li->current != NULL)
+        if (li->element != NULL)
         {
-            if (li->current->utility < min)
+            if (li->element->utility > max)
             {
-                bestL = li->current;
-                min = bestL->utility;
+                bestL = li->element;
+                max = bestL->utility;
             }
         }
         li = li->next;
@@ -1030,7 +1036,7 @@ void DP()
     }
 
     Label *ll = create_label(&activities[0]); // Initialise label with Dawn as first activity
-    bucket[ll->time][0].current = ll;         // store this label in the first position bucket structure
+    bucket[ll->time][0].element = ll;         // store this label in the first position bucket structure
 
     for (int h = ll->time; h < horizon - 1; h++) // for all time intervals from 0 to 288 (horizon = 289, the number of 5 min intervals in a day)
     { 
@@ -1045,7 +1051,7 @@ void DP()
                 // int myBool = list!=NULL;
                 // printf("myBool: %s\n", myBool ? "true" : "false");
 
-                Label *L = list->current; // for the current label in the l_list
+                Label *L = list->element; // for the current label in the l_list
 
                 for (int a1 = 0; a1 < num_activities; a1++)
                 { // for all the activities
@@ -1067,7 +1073,7 @@ void DP()
                             list_2 = list_1;
 
                             // If a label in the bucket is dominated by L1, this label is removed from the list (bucket)
-                            if (dominates(L1, list_1->current))
+                            if (dominates(L1, list_1->element))
                             {
                                 // printf("\n Dominance \n");
                                 list_1 = remove_label(list_1);
@@ -1075,7 +1081,7 @@ void DP()
                             // If L1 is dominated by a label in the bucket, no further comparason is needed for L1 and it's discarded
                             else
                             {
-                                if (dominates(list_1->current, L1))
+                                if (dominates(list_1->element, L1))
                                 {
                                     // printf("\n Dominance \n");
                                     free(L1);
@@ -1089,14 +1095,14 @@ void DP()
                         // si L1 n'est domine par aucun des label de la list du bucket, il faut l'y rajouter
                         if (!dom)
                         {
-                            if (list_2->current == NULL)
+                            if (list_2->element == NULL)
                             {
-                                list_2->current = L1;
+                                list_2->element = L1;
                             }
                             else
                             { // juste rajoute un label a la fin d'une Label_list
                                 L_list *Ln = malloc(sizeof(L_list));
-                                Ln->current = L1;
+                                Ln->element = L1;
                                 list_2->next = Ln;
                                 Ln->next = NULL;
                                 Ln->previous = list_1;

@@ -87,7 +87,7 @@ struct Label
 typedef struct L_list L_list;
 struct L_list
 {
-    Label *current;
+    Label *element;
     L_list *previous;
     L_list *next;
 };
