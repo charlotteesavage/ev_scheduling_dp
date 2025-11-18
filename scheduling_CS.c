@@ -774,9 +774,33 @@ static double update_utility(Label *L)
 
     L->utility = previous_L->utility;
 
+    if (L->act_id != previous_L->act_id) // make sure to check that you start a new activity
+    // because ASC, travel time, short, long, early and late all apply only to new acts
+    {
         L->utility += asc_parameters[group];
         L->utility += travel_time_penalty * travel_time(previous_act, act);
 
+        // START UTILITY OF NEW ACTIVITY
+        // need to elaborate on role of home activity here
+        if (previous_group != 0)
+        {
+            L->utility += short_parameters[previous_group] * time_interval *
+                          fmax(0, previous_act->des_duration - previous_L->duration);
+            L->utility += long_parameters[previous_group] * time_interval *
+                          fmax(0, previous_L->duration - previous_act->des_duration);
+        }
+
+        // service station has no duration penalties, only penalties come from cost of charge - ie inc long
+        // so only apply these below to non-home and
+        // non service station activities - service station penalty is only for long
+        if (group != 0 && !act->is_service_station)
+        {
+            L->utility += early_parameters[group] * time_interval *
+                          fmax(0, act->des_start_time - L->start_time);
+            L->utility += late_parameters[group] * time_interval *
+                          fmax(0, L->start_time - act->des_start_time);
+        }
+    }
     // time horizons differences are multiplied to be expressed in minutes from the parameters
 
     //     group_to_type = {
@@ -789,56 +813,33 @@ static double update_utility(Label *L)
     //     6: "Work",
     //     7: "ServiceStation",
     // }
-    // START UTILITY OF NEW ACTIVITY
-    if ((group == 1) || (group == 6))
-    { // education and work --> check flex params
-        L->utility += early_parameters[group] * time_interval * fmax(0, act->des_start_time - L->start_time - not_flex) + late_parameters[group] * time_interval * fmax(0, L->start_time - act->des_start_time - mid_flex);
-    }
-    if ((group == 2) || (group == 3) || (group == 4) || (group == 5))
-    { // errands, escort, leisure, shopping,
-        L->utility += early_parameters[group] * time_interval * fmax(0, act->des_start_time - L->start_time - flex) + late_parameters[group] * time_interval * fmax(0, L->start_time - act->des_start_time - mid_flex);
-    }
 
-    // service station has no duration penalties, only penalties come from cost of charge
-    // where does home activity sit here?
-    // check signs again
-
-    // DURATION UTILITY OF FINISHED ACTIVITY
-    if ((group == 1) || (group == 6))
-    { // work and education
-        L->utility += short_parameters[previous_group] * time_interval * fmax(0, previous_act->des_duration - previous_L->duration - not_flex) + long_parameters[previous_group] * time_interval * fmax(0, previous_L->duration - previous_act->des_duration - not_flex);
-    }
-    if ((group == 2) || (group == 3) || (group == 4) || (group == 5))
-    { // errands, escort, leisure, shopping
-        L->utility += short_parameters[previous_group] * time_interval * fmax(0, previous_act->des_duration - previous_L->duration - flex) + long_parameters[previous_group] * time_interval * fmax(0, previous_L->duration - previous_act->des_duration - flex);
-    }
-
-    // service station penalty is only for long
     // check if charging constrants can be used to deal with service stations instead
     // time window constraints between 7am and 11pm, not allowed outside that
 
-    // Charging utility terms
-    if (group == 6)
-    {
-        L->utility += gamma_charge_work;
-    }
-    //-3.34, # -3.34home slow charging relative to not charging
+    if (L->is_charging)
+    { // Charging utility terms
+        if (group == 6)
+        {
+            L->utility += gamma_charge_work;
+        }
+        //-3.34, # -3.34home slow charging relative to not charging
 
-    else if (group == 0)
-    {
-        L->utility += gamma_charge_home;
-    }
-    else
-    {
-        L->utility += gamma_charge_non_work;
-    }
+        else if (group == 0)
+        {
+            L->utility += gamma_charge_home;
+        }
+        else
+        {
+            L->utility += gamma_charge_non_work;
+        }
 
+        L->utility += beta_delta_soc * fmin(1 - previous_L->soc, L->delta_soc);
+
+        L->utility += beta_charge_cost * L->charge_cost;
+    }
     // SOC𝑎 represents the state of charge after travel and at the start time of activity 𝑎.
     L->utility += theta_soc * fmax(0, soc_threshold - L->soc);
-
-    L->utility += beta_delta_soc * fmin(1 - previous_L->soc, L->delta_soc);
-
-    L->utility += beta_charge_cost * L->charge_cost;
 
     return L->utility;
 };
@@ -916,7 +917,6 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
             new_label->duration = a->min_duration;
             new_label->time = new_label->start_time + new_label->duration;
         }
-        new_label->utility = update_utility(new_label);
 
         // **SERVICE STATION HANDLING**: No deviation penalties
         if (!a->is_service_station)
@@ -934,6 +934,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
                 new_label->deviation_dur += abs(current_label->duration - current_label->act->des_duration);
             }
         }
+        new_label->utility = update_utility(new_label);
     }
     return new_label;
 }
@@ -1064,6 +1065,7 @@ void DP()
 
                         // But : garder le minimum de L_list pour le temps au nouveau label et l'activite a1
                         // aim: keen the minimum value from L_list
+                        // checks the min value in the linked list and retains that one
                         int dom = 0;
                         L_list *list_1 = &bucket[L1->time][a1];
                         L_list *list_2 = &bucket[L1->time][a1];
