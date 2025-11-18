@@ -1,5 +1,10 @@
 /*  Algorythm developped by Fabian Torres & Pierre Hellich
-    Semester project Fall 2023                              */
+    Semester project Fall 2023
+
+    Given an EV driver's activity preferences and charging constraints,
+    what activities should they do, when, and where should they charge?
+
+    */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -67,10 +72,10 @@ double short_parameters[5];
 // new utility terms
 double gamma_charge_work = -3.59;     // inconvenience of charging at work activity
 double gamma_charge_non_work = -4.34; // inconvenience of charging at non-work activity
-double gamma_charge_home = -3.34;
-double theta_soc = -80;         // low battery SOC penalty param
-double beta_delta_soc = 25;     // charged battery SOC penalty param
-double beta_charge_cost = -0.3; // param for charging costs per mode
+double gamma_charge_home = -3.34;     // inconvenience of charging at home
+double theta_soc = -80;               // low battery SOC penalty param
+double beta_delta_soc = 25;           // charged battery SOC penalty param
+double beta_charge_cost = -0.3;       // param for charging costs per mode
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////// INITIALISATION /////////////////////////////////////////////////////////////////////
@@ -165,8 +170,8 @@ static double distance_x(Activity *a1, Activity *a2) // this will change as we w
 };
 
 static int travel_time(Activity *a1, Activity *a2)
-{                                                  // search TAG for reference speeds for urban traffic, cited value of why you're using a partiular speed
-    double dist = distance_x(a1, a2);              // this will change too
+{                                     // search TAG for reference speeds for urban traffic, cited value of why you're using a partiular speed
+    double dist = distance_x(a1, a2); // this will change too
     int time = (int)(dist / speed);
     time = (int)(ceil((double)time / time_interval) * time_interval); // Round down to the nearest 5-minute interval
     int travel_time_horizon = time / time_interval;                   // Divide by 5 to fit within the 0-289 time horizon
@@ -555,10 +560,10 @@ static int dom_mem_contains(Label *L1, Label *L2)
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /*  Determines if an Activity a can be added to a sequence ending in label L.
-    It returns 1 if it's feasible and 0 if it's not. 
-    Note - a is the considered activity, but does not yet have fixed duration 
-    or charging participation. 
-    As such, most constraints apply to the considered activity, a, except for 
+    It returns 1 if it's feasible and 0 if it's not.
+    Note - a is the considered activity, but does not yet have fixed duration
+    or charging participation.
+    As such, most constraints apply to the considered activity, a, except for
     duration and charging-based constraints which must be applied to L
     */
 
@@ -572,6 +577,19 @@ static int is_feasible(Label *L, Activity *a)
     { // exclude dawn if it's not the 1st activity of the label
         return 0;
     }
+
+    // CASE 1: Continuing at SAME activity
+    if (L->act_id == a->id)
+    { // If the current activity in L is the same as a, check the duration
+        if (L->duration + 1 > a->max_duration)
+        { // max duration
+            return 0;
+        }
+
+        return 1;
+    }
+
+    // Case 2: different activity from before
 
     if (L->act_id != a->id)
     { // If act of L isn't the same as a, do some checks
@@ -587,20 +605,24 @@ static int is_feasible(Label *L, Activity *a)
         { // Verifying the minimum duration of the current activity
             return 0;
         }
+
+        int tt = travel_time(L->act, a);
         // current time + travel_time for a + min duration for a + time for returning home > end of horizon
         // Ie enough time left in the horizon to add this activity
-        if (L->time + travel_time(L->act, a) + a->min_duration + travel_time(a, &activities[num_activities - 1]) >= horizon - 1)
+        if (L->time + tt + a->min_duration +
+                travel_time(a, &activities[num_activities - 1]) >=
+            horizon - 1)
         {
             return 0;
         }
         // Making sure the new activity starts and ends within its allowed time window : signes changed !
-        if (L->time + travel_time(L->act, a) < a->earliest_start)
+        if (L->time + tt < a->earliest_start)
         {
             return 0;
         }
         // if current time + travel time to next activity is less than the latest possible start time of the next activity,
         // not allowed
-        if (L->time + travel_time(L->act, a) > a->latest_start)
+        if (L->time + tt > a->latest_start)
         {
             return 0;
         }
@@ -615,9 +637,14 @@ static int is_feasible(Label *L, Activity *a)
             return 0;
         }
 
-        // EV SOC related:
-        double charge_needed = energy_consumed_soc(L->act, a); // for use in constraint 27 - charge_needed
+        // SOC constraint: must be non-negative after travel
+        double soc_after_travel = L->soc - energy_consumed_soc(L->act, a);
+        if (soc_after_travel < 0)
+        {
+            return 0;
+        }
 
+        // EV charging related:
         if (L->is_charging)
         {
             if (L->charge_duration <= 0)
@@ -628,20 +655,9 @@ static int is_feasible(Label *L, Activity *a)
             {
                 return 0;
             }
-
-            // if (L->soc + L->delta_soc > soc_full) // constraint 26
-            // {                                     // need that during a recharge, the battery capacity does not go above the full capacity pf the battery
-            //     return 0;
-            // }
-
-            // if (L->soc + L->delta_soc < charge_needed) // constraint 27
-            // {                                                    // need that the change in SOC during charging must not be less than the SOC needed to cover the next trip (to activity a)
-            //     return 0;
-            // }
         }
 
         if (L->charge_duration > L->act->max_duration) // constraint 31
-        // check this - shoudl this relate to current activity or next activity? Or both?
         {
             return 0;
         }
@@ -653,18 +669,10 @@ static int is_feasible(Label *L, Activity *a)
             {
                 return 0;
             }
-            // if (!L->act->max_duration <= L->charge_duration) // constraint 34
-            // {
-            //     return 0;
-            // }
         }
 
         else if (!L->is_charging)
         {
-            if (L->soc < charge_needed)
-            {
-                return 0;
-            }
 
             if (L->charge_duration > 0)
             {
@@ -682,15 +690,8 @@ static int is_feasible(Label *L, Activity *a)
         //     }
         //     return 0;
         // }
+        return 1;
     }
-    else
-    { // If the current activity in L is the same as a, check the duration
-        if (L->duration + 1 > a->max_duration)
-        { // max duration
-            return 0;
-        }
-    }
-    return 1;
 };
 
 /*  checks if Label L1 dominates Label L2 based on certain criteria.
@@ -773,8 +774,8 @@ static double update_utility(Label *L)
 
     L->utility = previous_L->utility;
 
-    L->utility += asc_parameters[group];
-    L->utility += travel_time_penalty * travel_time(previous_act, act);
+        L->utility += asc_parameters[group];
+        L->utility += travel_time_penalty * travel_time(previous_act, act);
 
     // time horizons differences are multiplied to be expressed in minutes from the parameters
 
