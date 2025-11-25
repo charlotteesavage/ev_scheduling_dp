@@ -34,18 +34,26 @@ typedef struct Activity
     int des_duration;
     int des_start_time;
 
-    int can_charge; // 1 for yes, 0 for no
+    int charge_mode; // Charging mode: 0=none, 1=slow, 2=fast, 3=rapid
+    int is_charging; // Is charging selected? 1 for yes, 0 for no
 
-    int slow_charging_available; // binary variable: 1 if available, 0 if higher vals available
-    int fast_charging_available; // binary variable: 1 if available, 0 otherwise
-    int rapid_charging_available; // binary variable: 1 if avail, 0 otherwise
+    int is_service_station; // 1 for yes, 0 for no
+
+    // int can_charge; // 1 for yes, 0 for no
+
+    // int slow_charging_available; // binary variable: 1 if available, 0 if higher vals available
+    // int fast_charging_available; // binary variable: 1 if available, 0 otherwise
+    // int rapid_charging_available; // binary variable: 1 if avail, 0 otherwise
 
     // double charging_price_slow;
     // double charging_price_fast;
     // double charging_price_rapid;
 
-    int is_service_station; // 1 for yes, 0 for no
 } Activity;
+
+// decision variable for: charging, which charge mode, need a duplication of a for every kind of charging you might do
+// just pick fastest charge mode available
+// want to expand to pick the optimal, not just fastest in the future
 
 typedef struct Label Label; // holds data about a particular state or decision at a certain step in the process
 struct Label
@@ -64,9 +72,9 @@ struct Label
     // They are not the objective, the real penalties are added inside update_utility
 
     double soc;          // battery state of charge at the start of activity 𝑎
-    int is_charging;     // Is charging scheduled? (0 or 1)
-    int charge_mode;     // Charging mode: 0=none, 1=slow, 2=fast, 3=rapid
-    int charge_duration; // Time spent charging (in time intervals)
+    // int is_charging;     // Is charging scheduled? (0 or 1)
+    // int charge_mode;     // Charging mode: 0=none, 1=slow, 2=fast, 3=rapid
+    int charge_duration; // cumulative time spent charging (in time intervals)
     double delta_soc;    // SOC increase during this charging time, if occurring
 
     double wasted_charger_time;
@@ -139,7 +147,7 @@ extern double early_parameters[5];
 extern double late_parameters[5];
 extern double long_parameters[5];
 extern double short_parameters[5];
-extern int flex, mid_flex, not_flex;
+// extern int flex, mid_flex, not_flex;
 
 // Charging utility parameters
 extern double gamma_charge_work;
