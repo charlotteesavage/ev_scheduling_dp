@@ -62,7 +62,7 @@ struct Label
     // They are not the objective, the real penalties are added inside update_utility
 
     double soc;          // battery state of charge at the start of activity 𝑎
-    int charge_duration; // cumulative time spent charging (in time intervals)
+    int charge_duration; // time spent charging at current activity
     double delta_soc;    // SOC increase during this charging time, if occurring
 
     double wasted_charger_time;
