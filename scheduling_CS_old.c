@@ -94,6 +94,9 @@ void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_
     travel_time_penalty = pytravel_time_penalty;
     horizon = pyhorizon;
     time_interval = pytime_interval;
+    // flex = pyflexible;
+    // mid_flex = pymid_flex;
+    // not_flex = pynot_flex;
 
     // printf("speed = %f, travel_time_penalty = %f, curfew_time = %d, max_outside_time = %d, max_travel_time = %d, peak_hour_time1 = %d, peak_hour_time2 = %d, time_interval = %d\n",
     //         speed, travel_time_penalty, curfew_time, max_outside_time, max_travel_time, peak_hour_time1,
@@ -137,6 +140,8 @@ static Label *create_label(Activity *aa)
     L->mem->previous = NULL;
 
     L->soc = initial_soc; // check this - might be parsed from individual data
+    // L->is_charging = aa->is_charging;
+    // L->charge_mode = aa->charge_mode;
     L->charge_duration = 0;
     L->delta_soc = 0; // clarify what is meant by this cf (10)
     L->charge_cost = 0;
@@ -186,18 +191,15 @@ static double energy_consumed_soc(Activity *a1, Activity *a2) // energy consumed
 
 static void get_charge_rate_and_price(Activity *a, double result[2])
 // need to make sure label charge modes are parsed to ints per .h file for this to work
-// all charge rates are in % terms of battery capacity, not absolute terms
 {
     double charge_rate = 0.0;
     double charge_price = 0.0;
 
     switch (a->charge_mode)
     {
-    case 1: // not charging
+    case 1:
         charge_rate = 0;
         charge_price = 0;
-        break;
-
     case 2:
         charge_rate = slow_charge_rate;
         if (a->group == 0)
@@ -570,7 +572,8 @@ static int dom_mem_contains(Label *L1, Label *L2)
 
 static int is_feasible(Label *L, Activity *a)
 {
-    // need to check charging stuff here
+    // need
+    // check charging stuff here
     // charge time - for new function for activity transition,
 
     // update_SOC to cap the charging time min(act_duration, time to full)
@@ -600,31 +603,17 @@ static int is_feasible(Label *L, Activity *a)
                 return 0;
             } // check continuity of charge mode
 
-            // check constraint 26:
             double results[2];
             get_charge_rate_and_price(a, results);
             double charge_rate = results[0];
             // double charge_price = results[1];
 
-            double delta_soc = charge_rate * time_interval / 60;
+            double delta_soc = charge_rate * time_interval;
 
             if (L->soc + delta_soc > soc_full)
             {
                 return 0;
             } // constraint 26
-
-            // if (L->charge_duration <= 0)
-            // {
-            //     return 0;
-            // } //constraint 31, do NOT need this here because we only check on activity a
-        }
-
-        if (a->is_service_station)
-        {
-            if (!a->is_charging)
-            {
-                return 0;
-            }
         }
         return 1;
     }
@@ -674,12 +663,37 @@ static int is_feasible(Label *L, Activity *a)
             return 0;
         }
 
+        // if (L->soc < 0) // constraint 25
+        // {               // need a positive SOC at all times
+        //     return 0;
+        // }
+
         // SOC constraint: must be non-negative after travel
         double soc_after_travel = L->soc - energy_consumed_soc(L->act, a);
         if (soc_after_travel < 0)
         {
             return 0;
         }
+
+        // these should have been checked already
+
+        // // EV charging related:
+        // if (L->is_charging)
+        // {
+        //     if (L->charge_duration <= 0)
+        //     {
+        //         return 0;
+        //     }
+        //     if (!L->act->can_charge) // constraint 35
+        //     {
+        //         return 0;
+        //     }
+        // }
+
+        // if (L->charge_duration > L->act->max_duration) // constraint 31
+        // {
+        //     return 0;
+        // }
 
         if (a->is_charging)
         {
@@ -688,12 +702,12 @@ static int is_feasible(Label *L, Activity *a)
             double charge_rate = results[0];
             // double charge_price = results[1];
 
-            double delta_soc = charge_rate * time_interval / 60;
+            double delta_soc = charge_rate * time_interval;
 
-            if (soc_after_travel + delta_soc > soc_full)
+            if (L->soc + delta_soc > battery_capacity)
             {
                 return 0;
-            } // constraint 26, but makes sure we don't pick an overzealous charge mode
+            } // constraint 26
         }
 
         if (a->is_service_station)
@@ -704,6 +718,26 @@ static int is_feasible(Label *L, Activity *a)
                 return 0;
             }
         }
+
+        // else if (!L->is_charging)
+        // {
+
+        //     if (L->charge_duration > 0)
+        //     {
+        //         return 0;
+        //     }
+        // }
+
+        // if(contains(L,a)){
+        //     // printf("\n contains = %d", contains(L, a));
+        //     return 0;
+        // }
+        // if(mem_contains(L,a) || contains(L, a)){
+        //     if(mem_contains(L,a) != contains(L, a)){
+        //         // printf("\n Difference = %d", mem_contains(L,a) - contains(L, a));
+        //     }
+        //     return 0;
+        // }
         return 1;
     }
 };
@@ -837,6 +871,7 @@ static double update_utility(Label *L)
         {
             L->utility += gamma_charge_work;
         }
+        //-3.34, # -3.34home slow charging relative to not charging
 
         else if (group == 0)
         {
@@ -878,6 +913,10 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
         new_label->duration = current_label->duration + 1;
         new_label->mem = copyLinkedList(current_label->mem);
 
+        // // inherit charging state
+        // new_label->is_charging = current_label->is_charging;
+        // new_label->charge_mode = current_label->charge_mode;
+
         if (a->is_charging)         // need to check for where charging is free??
         {                           // might have to put charging price back into activity class
             new_label->charge_duration = current_label->charge_duration + 1;
@@ -886,7 +925,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
             double charge_rate = results[0];
             double charge_price = results[1];
 
-            new_label->delta_soc = fmin(1 - current_label->soc, charge_rate * time_interval / 60.0);
+            new_label->delta_soc = fmin(1 - current_label->soc, charge_rate * time_interval);
             new_label->soc = current_label->soc + new_label->delta_soc;
 
             double tou_factor = get_tou_factor(new_label->time);
@@ -908,12 +947,12 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
         new_label->start_time = current_label->start_time + travel_time(current_label->act, a);
         new_label->mem = unionLinkedLists(current_label->mem, a->memory, a->group);
 
-        // current_label->soc already reflects all charging that has occurred up to this point
-        // No need to recalculate - just subtract travel consumption
         double soc_consumed = energy_consumed_soc(current_label->act, a);
         new_label->soc = current_label->soc - soc_consumed;
 
-        // if not charging, these below are all zero or unupdated
+        // // just put these at 0 for now, need to check...
+        // new_label->is_charging = 0;
+        // new_label->charge_mode = 0;
         new_label->charge_duration = 0;
         new_label->delta_soc = 0;
         new_label->charge_cost = current_label->charge_cost;
