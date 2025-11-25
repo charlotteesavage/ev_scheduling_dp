@@ -56,5 +56,4 @@ Thumbs.db
 *.bak
 
 
-scheduling_CS_with_additional_constraint_code.c
-offcuts.c
+offcuts/
