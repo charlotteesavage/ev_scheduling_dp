@@ -148,13 +148,13 @@ extern double beta_charge_cost;
 extern double soc_full;
 
 // Initialization functions
+void initialize_charge_rates(void);
 void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_penalty,
                             int pytime_interval, double *asc, double *early, double *late,
                             double *longp, double *shortp
 
 );
 void set_activities(Activity *activities_data, int pynum_activities);
-void initialize_charge_rates(void);
 
 // Algorithm functions
 void DP(void);

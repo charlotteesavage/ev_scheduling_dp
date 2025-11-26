@@ -85,6 +85,14 @@ int get_count() { return DSSR_count; }
 double get_total_time() { return total_time; }
 Label *get_final_schedule() { return final_schedule; }
 
+void initialize_charge_rates(void) // initialise these rates per eqn (39) in paper
+// these are the charge rates per HOUR
+{
+    slow_charge_rate = slow_charge_power / battery_capacity; // fraction of battery charged per hour
+    fast_charge_rate = fast_charge_power / battery_capacity;
+    rapid_charge_rate = rapid_charge_power / battery_capacity;
+}
+
 void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_penalty, int pytime_interval,
                             double *asc, double *early, double *late, double *longp, double *shortp
                             // int pyflexible, int pymid_flex, int pynot_flex
@@ -145,14 +153,6 @@ static Label *create_label(Activity *aa)
     return L;
 };
 
-void initialize_charge_rates(void) // initialise these rates per eqn (39) in paper
-// these are the charge rates per HOUR
-{
-    slow_charge_rate = slow_charge_power / battery_capacity; // fraction of battery charged per hour
-    fast_charge_rate = fast_charge_power / battery_capacity;
-    rapid_charge_rate = rapid_charge_power / battery_capacity;
-}
-
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////// HELPER FUNCTIONS /////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -167,7 +167,7 @@ static double distance_x(Activity *a1, Activity *a2) // this will change as we w
 };
 
 static int travel_time(Activity *a1, Activity *a2)
-{                                     // search TAG for reference speeds for urban traffic, cited value of why you're using a partiular speed
+{
     double dist = distance_x(a1, a2); // this will change too
     int time = (int)(dist / speed);
     time = (int)(ceil((double)time / time_interval) * time_interval); // Round down to the nearest 5-minute interval
