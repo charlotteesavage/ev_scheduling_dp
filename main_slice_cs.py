@@ -11,8 +11,8 @@ import os
 
 warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
 
-LOCAL = "NewYork"
-SCHEDULING_VERSION = 6
+LOCAL = "Sheffield"
+# SCHEDULING_VERSION = 6
 TIME_INTERVAL = 5
 HORIZON = round(24 * 60 / TIME_INTERVAL) + 1
 # SPEED = 19 * 16.667  # 1km/h = 16.667 m/min
@@ -25,12 +25,12 @@ SPEED = AVG_SPEED_Sheffield * 16.667  # 1km/h = 16.667 m/min
 TRAVEL_TIME_PENALTY = 0.1  # we will add dusk, home, dawn and work
 H8 = round(8 * 60 / TIME_INTERVAL) + 1
 H12 = round(12 * 60 / TIME_INTERVAL) + 1
-H13 = round(13 * 60 / TIME_INTERVAL) + 1
-H17 = round(17 * 60 / TIME_INTERVAL) + 1
-H20 = round(20 * 60 / TIME_INTERVAL) + 1
-FLEXIBLE = round(60 / TIME_INTERVAL)
-MIDDLE_FLEXIBLE = round(30 / TIME_INTERVAL)
-NOT_FLEXIBLE = round(10 / TIME_INTERVAL)
+H18 = round(18 * 60 / TIME_INTERVAL) + 1
+H21 = round(21 * 60 / TIME_INTERVAL) + 1
+
+# FLEXIBLE = round(60 / TIME_INTERVAL)
+# MIDDLE_FLEXIBLE = round(30 / TIME_INTERVAL)
+# NOT_FLEXIBLE = round(10 / TIME_INTERVAL)
 # activity_types = ["Home", "Education", "Errands", "Escort", "Leisure", "Shopping","Work", "ServiceStation"]
 group_to_type = {
     0: "Home",
@@ -77,14 +77,8 @@ Activity._fields_ = [
     ("memory", POINTER(Group_mem)),
     ("des_duration", c_int),
     ("des_start_time", c_int),
-    ("can_charge", c_int),  # mske bool in C, but use c_int for compatibility?
-    ("slow_charging_available", c_int),
-    ("fast_charging_available", c_int),
-    ("rapid_charging_available", c_int),
-    # ("charging_price_slow", c_double),
-    # ("charging_price_fast", c_double),
-    # ("charging_price_rapid", c_double), // not sure I need these...
-    ("is_service_station", c_int),  # make bool in C ?
+    ("charge_mode", c_int)("is_charging", c_int),
+    ("is_service_station", c_int),
 ]
 
 
@@ -100,10 +94,8 @@ Label._fields_ = [
     ("deviation_start", c_int),
     ("deviation_dur", c_int),
     ("soc", c_double),
-    ("is_charging", c_int),
-    ("charge_mode", c_int),
     ("charge_duration", c_int),
-    ("charged_soc", c_double),
+    ("delta_soc", c_double),
     ("charge_cost", c_double),
     ("utility", c_double),
     ("mem", POINTER(Group_mem)),
@@ -200,14 +192,24 @@ def initialize_and_personalize_activities(df, num_activities, individual):
 def initialize_utility():
     UtilityParams = namedtuple("UtilityParams", "asc early late long short")
     params = UtilityParams(
-        asc=[0, 18.7, 13.1, 8.74],
-        early=[0, 1.35, 0.619, 0.0996],
-        late=[0, 1.63, 0.338, 0.239],
-        long=[0, 1.14, 1.22, 0.08],
-        short=[0, 1.75, 0.932, 0.101],
+        asc=[0, 17.4, 16.1, 6.76, 12, 11.3, 10.6, 0],
+        early=[0, -2.56, -1.73, -2.55, -0.031, -2.51, -1.37, 0],
+        late=[0, -1.54, -3.42, -0.578, -1.58, -0.993, -0.79, 0],
+        long=[0, -0.0783, -0.597, -0.0267, -0.209, -0.133, -0.201, 0],
+        short=[0, -0.783, -5.63, 0.134, -0.00764, 0.528, -4.78, 0],
     )
     return params
 
+# group_to_type = {
+#     0: "Home",
+#     1: "Education",
+#     2: "Errands",
+#     3: "Escort",
+#     4: "Leisure",
+#     5: "Shopping",
+#     6: "Work",
+#     7: "ServiceStation",
+# }
 
 def compile_code():  # used AI to help make this, need to double check it
     """Compile the scheduling C code as a shared library for Python ctypes."""
@@ -250,13 +252,13 @@ def extract_schedule_data(label_pointer, activity_df, individual, num_activities
     for label_pointer in reversed(path_to_root):
         label = label_pointer.contents
 
-        acity = label.acity
-        if (acity > 0) and (acity < num_activities - 3):
-            activity_row_from_csv = activity_df.iloc[acity - 1]
+        act_id = label.act_id
+        if (act_id > 0) and (act_id < num_activities - 3):
+            activity_row_from_csv = activity_df.iloc[act_id - 1]
             facility_id = activity_row_from_csv["facility"]
             x = activity_row_from_csv["x"]
             y = activity_row_from_csv["y"]
-        elif acity == num_activities - 3:
+        elif act_id == num_activities - 3:
             facility_id = individual["work_id"]
             x = individual["work_x"]
             y = individual["work_y"]
@@ -266,7 +268,7 @@ def extract_schedule_data(label_pointer, activity_df, individual, num_activities
             y = individual["home_y"]
 
         data = {
-            "acity": label.acity,
+            "act_id": label.act_id,
             "facility": facility_id,
             "group": group_to_type[label.act.contents.group],
             "start": label.start_time,
@@ -276,7 +278,7 @@ def extract_schedule_data(label_pointer, activity_df, individual, num_activities
             "y": y,
         }
 
-        unique_key = (data["acity"], data["start"])
+        unique_key = (data["act_id"], data["start"])
         if (
             unique_key not in schedule_data_dict
             or schedule_data_dict[unique_key]["duration"] < data["duration"]
@@ -364,9 +366,9 @@ def compile_and_initialize(start, end):
         late_array,
         long_array,
         short_array,
-        c_int(FLEXIBLE),
-        c_int(MIDDLE_FLEXIBLE),
-        c_int(NOT_FLEXIBLE),
+        # c_int(FLEXIBLE),
+        # c_int(MIDDLE_FLEXIBLE),
+        # c_int(NOT_FLEXIBLE),
     )
 
     return activity_csv, population_csv, lib
