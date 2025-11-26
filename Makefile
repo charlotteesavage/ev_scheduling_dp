@@ -4,15 +4,20 @@
 
 # Compiler settings
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -std=c11
+CFLAGS = -Wall -Wextra -O2 -std=c11 -Iinclude
 LDFLAGS = -lm
 
-# Target executable name
-TARGET = scheduling_CS
+# Directories
+SRC_DIR = src
+INC_DIR = include
+OBJ_DIR = obj
 
-# Source files
-SOURCES = scheduling_CS.c scheduling_main.c
-HEADERS = scheduling_CS.h
+# Target executable name
+TARGET = scheduling
+
+# Source files (with paths)
+SOURCES = $(SRC_DIR)/scheduling.c $(SRC_DIR)/main.c $(SRC_DIR)/utils.c
+HEADERS = $(INC_DIR)/scheduling.h $(INC_DIR)/utils.h
 
 # Object files (automatically derived from sources)
 OBJECTS = $(SOURCES:.c=.o)
