@@ -34,9 +34,9 @@ double energy_consumption_rate = 0.2; // kwh_per_km
 double initial_soc = 1.0; // this is pulled from a uniform distribution
 // uniform dist between 0.3 and 1, with option to go below 0.3 for small %
 
-// double slow_charge_power = 7.0;
-// double fast_charge_power = 22;
-// double rapid_charge_power = 50;
+double slow_charge_power = 7.0;
+double fast_charge_power = 22;
+double rapid_charge_power = 50;
 
 double slow_charge_rate;  // for power 7 kW
 double fast_charge_rate;  // for power 22 kW
@@ -67,7 +67,6 @@ double early_parameters[5];
 double late_parameters[5];
 double long_parameters[5];
 double short_parameters[5];
-// int flex, mid_flex, not_flex; // how much deviation is allowed from the preferred schedule
 
 // new utility terms
 double gamma_charge_work = -3.59;     // inconvenience of charging at work activity
@@ -145,10 +144,11 @@ static Label *create_label(Activity *aa)
 };
 
 static void initialize_charge_rates() // initialise these rates per eqn (39) in paper
+// these are the charge rates per HOUR
 {
-    slow_charge_rate = 7.0 / battery_capacity;
-    fast_charge_rate = 22.0 / battery_capacity;
-    rapid_charge_rate = 50.0 / battery_capacity;
+    slow_charge_rate = slow_charge_power / battery_capacity; // fraction of battery charged per hour
+    fast_charge_rate = fast_charge_power / battery_capacity;
+    rapid_charge_rate = rapid_charge_power / battery_capacity;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -319,7 +319,8 @@ void free_bucket()
         {
             L_list *L = &bucket[i][j];
             delete_list(L);
-            &bucket[i][j] == NULL;
+            // &bucket[i][j] == NULL;
+            bucket[i][j].element = NULL;
         }
         free(bucket[i]);
         bucket[i] = NULL;
@@ -903,13 +904,12 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
             double charge_rate = results[0];
             double charge_price = results[1];
 
-            new_label->delta_soc = fmin(1 - current_label->soc, charge_rate * (time_interval / 60.0));
+            new_label->delta_soc = fmin(1 - current_label->soc, charge_rate * (time_interval / 60.0)); // need the time interval as a fraction of an hour for the charge_rate
             new_label->soc = current_label->soc + new_label->delta_soc;
 
             double tou_factor = get_tou_factor(new_label->time);
-            // double interval_cost = charge_price * tou_factor * charge_rate * (time_interval / 60.0);
-            double energy_charged_kwh = new_label->delta_soc * battery_capacity; // fraction * kWh = kWh
-            double interval_cost = charge_price * tou_factor * energy_charged_kwh;
+            double energy_charged_kwh = new_label->delta_soc * battery_capacity;   // need to get the actual energy charged in kwh, not as a % of battery
+            double interval_cost = charge_price * tou_factor * energy_charged_kwh; // we can now just use the price per kwh, as the energy is expressed in kwh
             new_label->charge_cost = current_label->charge_cost + interval_cost;
         }
         else

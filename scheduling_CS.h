@@ -65,7 +65,7 @@ struct Label
     int charge_duration; // time spent charging at current activity
     double delta_soc;    // SOC increase during this charging time, if occurring
 
-    double wasted_charger_time;
+    // double wasted_charger_time;
 
     double charge_cost; // cumulative charging cost
 
@@ -144,7 +144,7 @@ extern double gamma_charge_home;
 extern double theta_soc;
 extern double beta_delta_soc;
 extern double beta_charge_cost;
-extern int soc_full;
+extern double soc_full;
 
 // Initialization functions
 void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_penalty,
