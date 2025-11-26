@@ -33,6 +33,14 @@ ENV/
 *.out
 *.dSYM/
 
+# Build directories
+bin/
+obj/
+
+# Old executables in root
+scheduling
+scheduling_CS
+
 # Output and data files
 output/
 *.csv

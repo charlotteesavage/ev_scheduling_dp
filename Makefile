@@ -11,35 +11,43 @@ LDFLAGS = -lm
 SRC_DIR = src
 INC_DIR = include
 OBJ_DIR = obj
+BIN_DIR = bin
 
 # Target executable name
-TARGET = scheduling
+TARGET = $(BIN_DIR)/scheduling
 
 # Source files (with paths)
 SOURCES = $(SRC_DIR)/scheduling.c $(SRC_DIR)/main.c $(SRC_DIR)/utils.c
 HEADERS = $(INC_DIR)/scheduling.h $(INC_DIR)/utils.h
 
-# Object files (automatically derived from sources)
-OBJECTS = $(SOURCES:.c=.o)
+# Object files (in obj directory)
+OBJECTS = $(OBJ_DIR)/scheduling.o $(OBJ_DIR)/main.o $(OBJ_DIR)/utils.o
 
 # Default target - builds the executable
 all: $(TARGET)
 
 # Link object files to create the executable
-$(TARGET): $(OBJECTS)
+$(TARGET): $(OBJECTS) | $(BIN_DIR)
 	@echo "Linking $@..."
 	$(CC) $(OBJECTS) -o $(TARGET) $(LDFLAGS)
 	@echo "Build successful! Executable: $(TARGET)"
 
-# Compile .c files to .o files
-%.o: %.c $(HEADERS)
+# Create directories if they don't exist
+$(BIN_DIR):
+	@mkdir -p $(BIN_DIR)
+
+$(OBJ_DIR):
+	@mkdir -p $(OBJ_DIR)
+
+# Compile .c files to .o files in obj directory
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c $(HEADERS) | $(OBJ_DIR)
 	@echo "Compiling $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Clean up build artifacts
 clean:
 	@echo "Cleaning up..."
-	rm -f $(OBJECTS) $(TARGET)
+	rm -rf $(OBJ_DIR) $(BIN_DIR)
 	rm -rf *.dSYM
 	@echo "Clean complete!"
 
@@ -48,7 +56,7 @@ rebuild: clean all
 
 # Run the program (requires implementation of proper initialization)
 run: $(TARGET)
-	./$(TARGET)
+	$(TARGET)
 
 # Debug build (with debugging symbols and no optimization)
 debug: CFLAGS = -Wall -Wextra -g -std=c11
