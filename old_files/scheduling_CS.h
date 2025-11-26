@@ -1,10 +1,10 @@
 /*  Algorythm developped by Fabian Torres & Pierre Hellich
     Semester project Fall 2023                              */
 
-#ifndef SCHEDULING_H
-#define SCHEDULING_H
+#ifndef SCHEDULING_CS_H
+#define SCHEDULING_CS_H
 
-// #include <stdbool.h>
+#include <stdbool.h>
 
 /////////////////////////////////////////////////////////////
 ///////////////////////// STRUCTS ////////////////////////////
@@ -122,7 +122,6 @@ extern double free_charging;
 extern double tou_peak_factor;
 extern double tou_midpeak_factor;
 extern double tou_offpeak_factor;
-
 extern int peak_start;
 extern int peak_end;
 extern int midpeak1_start;
@@ -151,13 +150,28 @@ extern double soc_full;
 void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_penalty,
                             int pytime_interval, double *asc, double *early, double *late,
                             double *longp, double *shortp
-
+                            // int pyflexible, int pymid_flex,
+                            // int pynot_flex
 );
 void set_activities(Activity *activities_data, int pynum_activities);
 void initialize_charge_rates(void);
+
+// Utility functions
+void recursive_print(Label *L);
+Label *find_best(L_list *B, int o);
+
+// Result accessors
+int get_count(void);
+double get_total_time(void);
+Label *get_final_schedule(void);
+
+// Execution functions
+// Memory management functions
+void create_bucket(int a, int b);
+void free_bucket(void);
 
 // Algorithm functions
 void DP(void);
 int DSSR(Label *L);
 
-#endif // SCHEDULING_H
+#endif // SCHEDULING_CS_H
