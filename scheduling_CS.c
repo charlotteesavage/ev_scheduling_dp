@@ -54,12 +54,12 @@ double tou_peak_factor = 1.5;
 double tou_midpeak_factor = 2.5;
 double tou_offpeak_factor = 1;
 
-int peak_start;     // 12:00 in time intervals
-int peak_end;       // 18:00 in time intervals
-int midpeak1_start; // 8:00
-int midpeak1_end;   // 12:00
-int midpeak2_start; // 18:00
-int midpeak2_end;   // 21:00
+int peak_start = 12;     // 12:00 
+int peak_end = 18;       // 18:00
+int midpeak1_start = 8;  // 8:00
+int midpeak1_end = 12;   // 12:00
+int midpeak2_start = 18; // 18:00
+int midpeak2_end = 21;   // 21:00
 
 /// utility_parameters
 double asc_parameters[5];
@@ -93,6 +93,7 @@ void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_
     travel_time_penalty = pytravel_time_penalty;
     horizon = pyhorizon;
     time_interval = pytime_interval;
+    initialize_charge_rates();
 
     // printf("speed = %f, travel_time_penalty = %f, curfew_time = %d, max_outside_time = %d, max_travel_time = %d, peak_hour_time1 = %d, peak_hour_time2 = %d, time_interval = %d\n",
     //         speed, travel_time_penalty, curfew_time, max_outside_time, max_travel_time, peak_hour_time1,
@@ -226,7 +227,7 @@ static void get_charge_rate_and_price(Activity *a, double result[2])
 
 static double get_tou_factor(int time)
 {
-    int hour = (time * time_interval) / 60;
+    int hour = (time * time_interval) / 60; // gives the time in 24hour standard
 
     if (hour >= peak_start && hour < peak_end)
     {
