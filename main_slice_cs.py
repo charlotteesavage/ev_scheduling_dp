@@ -5,7 +5,6 @@ from ctypes import Structure, c_int, c_double, POINTER, CDLL
 import pandas as pd
 from collections import namedtuple
 import time
-import Post_processing_slice
 import warnings
 import os
 
@@ -17,16 +16,21 @@ TIME_INTERVAL = 5
 HORIZON = round(24 * 60 / TIME_INTERVAL) + 1
 # SPEED = 19 * 16.667  # 1km/h = 16.667 m/min
 
-AVG_SPEED_Sheffield = (
+
+#// search TAG for reference speeds for urban traffic, cited value of why you're using a partiular speed
+AVG_SPEED_PER_HOUR= (
     20.4 * 1.60934
 )  # km/h taken from https://www.gov.uk/government/statistical-data-sets/average-speed-delay-and-reliability-of-travel-times-cgn#average-speed-delay-and-reliability-of-travel-times-on-local-a-roads-cgn05
 # can also check https://www.gov.uk/government/publications/webtag-tag-unit-m1-2-data-sources-and-surveys
-SPEED = AVG_SPEED_Sheffield * 16.667  # 1km/h = 16.667 m/min
+SPEED = AVG_SPEED_PER_HOUR * 16.667  # 1km/h = 16.667 m/min, converts it to minutes
 TRAVEL_TIME_PENALTY = 0.1  # we will add dusk, home, dawn and work
-H8 = round(8 * 60 / TIME_INTERVAL) + 1
-H12 = round(12 * 60 / TIME_INTERVAL) + 1
-H18 = round(18 * 60 / TIME_INTERVAL) + 1
-H21 = round(21 * 60 / TIME_INTERVAL) + 1
+
+# change all below to normal minutes
+
+# H8 = round(8 * 60 / TIME_INTERVAL) + 1
+# H12 = round(12 * 60 / TIME_INTERVAL) + 1
+# H18 = round(18 * 60 / TIME_INTERVAL) + 1
+# H21 = round(21 * 60 / TIME_INTERVAL) + 1
 
 # FLEXIBLE = round(60 / TIME_INTERVAL)
 # MIDDLE_FLEXIBLE = round(30 / TIME_INTERVAL)
@@ -77,7 +81,8 @@ Activity._fields_ = [
     ("memory", POINTER(Group_mem)),
     ("des_duration", c_int),
     ("des_start_time", c_int),
-    ("charge_mode", c_int)("is_charging", c_int),
+    ("charge_mode", c_int),
+    ("is_charging", c_int),
     ("is_service_station", c_int),
 ]
 
@@ -211,10 +216,22 @@ def initialize_utility():
 #     7: "ServiceStation",
 # }
 
-def compile_code():  # used AI to help make this, need to double check it
+def compile_code():
     """Compile the scheduling C code as a shared library for Python ctypes."""
     # Get the current directory
     current_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Define paths
+    src_dir = os.path.join(current_dir, "src")
+    inc_dir = os.path.join(current_dir, "include")
+    output_lib = os.path.join(current_dir, "scheduling_CS.so")
+
+    # Source files to compile
+    sources = [
+        os.path.join(src_dir, "scheduling.c"),
+        os.path.join(src_dir, "utils.c"),
+        os.path.join(src_dir, "main.c"),
+    ]
 
     compile_command = [
         "gcc",
@@ -222,12 +239,10 @@ def compile_code():  # used AI to help make this, need to double check it
         "-O3",
         "-shared",
         "-fPIC",
+        f"-I{inc_dir}",
         "-o",
-        f"{current_dir}/scheduling_CS.so",
-        f"{current_dir}/scheduling_CS.c",
-        f"{current_dir}/scheduling_main.c",
-        "-lm",
-    ]
+        output_lib,
+    ] + sources + ["-lm"]
 
     print(f"Compiling C code: {' '.join(compile_command)}")
     result = subprocess.run(compile_command, capture_output=True, text=True)
@@ -239,7 +254,7 @@ def compile_code():  # used AI to help make this, need to double check it
     else:
         print("Compilation successful! Created scheduling_CS.so")
 
-    return f"{current_dir}/scheduling_CS.so"
+    return output_lib
 
 
 def extract_schedule_data(label_pointer, activity_df, individual, num_activities):
@@ -330,14 +345,20 @@ def filter_closest(
     return selected_activities.reset_index(drop=True)
 
 
-def compile_and_initialize(start, end):
+def compile_and_initialize(start, end, data_dir=None):
     so_path = compile_code()
     lib = CDLL(so_path)
+
+    # Use provided data directory or default to current directory structure
+    if data_dir is None:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(current_dir, "data")
+
     activity_csv = pd.read_csv(
-        f"/home/ccortes/Modeling-Individual-Activity-Schedules-and-Behavior-Changes-in-COVID-19/Data/2_PreProcessed/activities_{LOCAL}.csv"
+        os.path.join(data_dir, f"activities_{LOCAL}.csv")
     )
     population_csv = pd.read_csv(
-        f"/home/ccortes/Modeling-Individual-Activity-Schedules-and-Behavior-Changes-in-COVID-19/Data/2_PreProcessed/population_{LOCAL}.csv"
+        os.path.join(data_dir, f"population_{LOCAL}.csv")
     ).iloc[start:end]
 
     lib.get_final_schedule.restype = POINTER(Label)
@@ -375,12 +396,15 @@ def compile_and_initialize(start, end):
 
 
 def call_to_optimizer(
-    activity_csv, population_csv, scenario, constraints, num_act_to_select=15
+    activity_csv, population_csv, scenario, constraints, num_act_to_select=15, output_dir=None
 ):
     print(f"Running scenario: {scenario}")
-    # Note: set_scenario_constraints doesn't exist in scheduling_CS.c
-    # constraints_array = (c_int * len(constraints))(*constraints)
-    # lib.set_scenario_constraints(constraints_array)
+
+    # Use provided output directory or default to current directory
+    if output_dir is None:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        output_dir = os.path.join(current_dir, "output")
+
     activities_locations = activity_csv[["x", "y"]].to_numpy()
 
     total_deviations_start = []
@@ -402,8 +426,11 @@ def call_to_optimizer(
             closest_facilities, num_activities, individual
         )
         lib.set_activities(activities_array, num_activities)
+
+        # Run the complete algorithm (creates bucket, runs DP, handles DSSR)
         lib.main()
 
+        # Get the final schedule
         schedule_pointer = lib.get_final_schedule()
         schedule_data = extract_schedule_data(
             schedule_pointer, activity_csv, individual, num_activities
@@ -435,8 +462,9 @@ def call_to_optimizer(
                     "daily_schedule": schedules,
                 }
             )
+            output_file = os.path.join(output_dir, f"{scenario}_{LOCAL}.json")
             results.to_json(
-                f"/home/ccortes/Modeling-Individual-Activity-Schedules-and-Behavior-Changes-in-COVID-19/Data/3_Generated/{scenario}{LOCAL}.json",
+                output_file,
                 orient="records",
                 lines=True,
                 indent=4,
@@ -450,21 +478,12 @@ def call_to_optimizer(
             total_deviations_dur.clear()
 
 
-if __name__ == "__main__":  # haven't touched this yet 03/11/2025
-    scenari = ["Normal_life"]
+if __name__ == "__main__":
     n = 15
-    start_index = 150000
-    end_index = 320000  # Adjust this to the range you want to process
+    start_index = 0  # Start from beginning for testing
+    end_index = 10   # Small test set to verify compilation works
+
     activity_csv, population_csv, lib = compile_and_initialize(start_index, end_index)
-    constraints = {
-        "Normal_life": [0, 0, 0, 0, 0, 0, 0],
-        "Outings_limitation": [1, 0, 0, 0, 1, 0, 0],
-        "Only_economy": [1, 1, 1, 0, 0, 0, 0],
-        "Early_curfew": [0, 0, 0, 0, 0, 1, 0],
-        "Essential_needs": [1, 0, 1, 0, 0, 0, 0],
-        "Finding_balance": [0, 0, 0, 0, 0, 0, 1],
-        "Impact_of_leisure": [1, 0, 0, 0, 0, 0, 0],
-    }
 
     elapsed_times = []
     for scenario_name in scenari:
@@ -473,7 +492,7 @@ if __name__ == "__main__":  # haven't touched this yet 03/11/2025
             activity_csv,
             population_csv,
             scenario_name,
-            constraints[scenario_name],
+            constraints,
             num_act_to_select=n,
         )
         end_time = time.time()
@@ -485,6 +504,6 @@ if __name__ == "__main__":  # haven't touched this yet 03/11/2025
 
     print(elapsed_times)
     print("Creating the Post-processed files...")
-    Post_processing_slice.create_postprocess_files(
-        LOCAL, TIME_INTERVAL, scenari, end_index
-    )
+    # Post_processing_slice.create_postprocess_files(
+    #     LOCAL, TIME_INTERVAL, scenari, end_index
+    # )
