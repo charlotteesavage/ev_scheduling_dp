@@ -34,5 +34,9 @@ int contains(Label *L, Activity *a);
 int mem_contains(Label *L, Activity *a);
 int dom_mem_contains(Label *L1, Label *L2);
 
+// Random number generation functions
+void seed_random(unsigned int seed);
+double normal_random(double mean, double std_dev);
+
 
 #endif // UTILS_H

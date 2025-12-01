@@ -15,7 +15,7 @@ void recursive_print(Label *L)
         {
             recursive_print(L->previous);
         }
-        printf("(act = %d, group = %d, start = %d, duration = %d, time = %d), ", L->act_id, L->act->group, L->start_time, L->duration, L->time);
+        printf("(act = %d, type = %d, start = %d, duration = %d, time = %d), ", L->act_id, L->act->activity_type, L->start_time, L->duration, L->time);
     }
 };
 
@@ -249,7 +249,7 @@ void add_memory(int at, int c)
     }
 };
 
-/* checks if the group of activity a is already done during the label L
+/* checks if the activity_type of activity a is already done during the label L
     peut etre a supprimer pcq un label peut etre creer a partir d'un autre label, mais poursuivre la meme actviite donc ca retournera 1 a cause de la meme activite que l'on check
     si on met une difference de acity ca peut revenir au meme
     au final meme pas utilise !
@@ -257,13 +257,13 @@ void add_memory(int at, int c)
     modifier la fonction et faire un print de s'ils sont differents seulement !!*/
 int contains(Label *L, Activity *a)
 {
-    if (a->group == 0)
+    if (a->activity_type == 0)
     {
         return 0;
     }
     while (L != NULL)
     {
-        if ((L->act->group == a->group) && (L->act->id != a->id))
+        if ((L->act->activity_type == a->activity_type) && (L->act->id != a->id))
         {             // L->act->id = L->acity
             return 1; // If there's a match, the function returns 1 (true)
         }
@@ -272,18 +272,18 @@ int contains(Label *L, Activity *a)
     return 0;
 };
 
-/* checks if the group of activity a is already in the group memory of label L  */
-// blocks adding an activity if its group is already in memory
+/* checks if the activity_type of activity a is already in the group memory of label L  */
+// blocks adding an activity if its activity_type is already in memory
 int mem_contains(Label *L, Activity *a)
 {
-    if (a->group == 0)
+    if (a->activity_type == 0)
     {
         return 0;
     }
-    Group_mem *gg = L->mem; // see if the group memory in Label matches the group of a.
+    Group_mem *gg = L->mem; // see if the group memory in Label matches the activity_type of a.
     while (gg != NULL)
     {
-        if (gg->g == a->group)
+        if (gg->g == a->activity_type)
         {
             return 1;
         } // Returns 1 if there is a match
@@ -323,3 +323,29 @@ int dom_mem_contains(Label *L1, Label *L2)
     // If all Group_mem in L1->mem are found in L2->mem, it returns 1 (true)
     return 1;
 };
+
+// seeds the random number generator for drand48()
+void seed_random(unsigned int seed)
+{
+    srand48(seed);
+}
+
+// generates a random number from a normal distribution using Box-Muller transform
+double normal_random(double mean, double std_dev)
+{
+    double r1;
+    double r2;
+
+    // Ensure r1 is never exactly 0 to avoid log(0) = -infinity
+    do {
+        r1 = drand48();
+    } while (r1 == 0.0);
+
+    r2 = drand48();
+
+    // Box-Muller transform: convert uniform to standard normal
+    double x = sqrt(-2.0 * log(r1)) * cos(2.0 * M_PI * r2);
+
+    // Scale and shift to desired mean and std_dev
+    return mean + std_dev * x;
+}
