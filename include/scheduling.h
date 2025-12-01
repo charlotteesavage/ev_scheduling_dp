@@ -21,6 +21,7 @@ struct Group_mem
 };
 
 typedef struct Activity
+// id encompasses unique combo of type, charging mode, and location!!!!
 {
     int id; // this is a unique node identifier, different from group_id
     int earliest_start;
@@ -29,7 +30,7 @@ typedef struct Activity
     int max_duration;
     int x;
     int y;
-    int group; // this is the activity type
+    int activity_type; // this is the activity type
     Group_mem *memory;
     int des_duration;
     int des_start_time;
@@ -49,10 +50,10 @@ typedef struct Label Label; // holds data about a particular state or decision a
 struct Label
 {                   // like a tree
     int act_id;     // additional activity identifier ? (faster than L->act->id)
-    int time;       // current time
+    int time;       // current time in minutes since midnight
     int start_time; // lets you compute the start time penalty (early/late) and check the activity's time window
     // ^^ feeds the cost update when you enter a *new* activity
-    int duration; // time since the start of current activity
+    int duration; // time since the start of current activity in minutes
     //  ^^ lets you check min/max duration constraint & compute the duration penalty (short/long)
     // for the activity that just finished when you switch to the next activity (see update_utility)
     int deviation_start;
@@ -61,13 +62,19 @@ struct Label
     // they are book-keeping/diagnostic features and could be used in dominance rules
     // They are not the objective, the real penalties are added inside update_utility
 
-    double soc;          // battery state of charge at the start of activity 𝑎
-    int charge_duration; // time spent charging at current activity
-    double delta_soc;    // SOC increase during this charging time, if occurring
+    double soc_at_activity_start; // battery state of charge at the start of activity 𝑎
+    double current_soc;           // battery state in activity - relevant for charging activities
+    // double delta_soc_during_interval; // SOC increase during this charging time, if occurring
+    // double total_delta_soc;
+    // double soc; // check this - might be parsed from individual data
+    int charge_duration;
+    double delta_soc; // clarify what is meant by this cf (10)
+
+    int charge_duration; // cumulative time spent charging at current activity (resets to zero when move to new activity)
 
     // double wasted_charger_time;
 
-    double charge_cost; // cumulative charging cost
+    double charge_cost; // cumulative charging cost over whole day
 
     double utility; // cumulative utility
 
@@ -89,7 +96,7 @@ struct L_list
 };
 
 // Global constants
-extern int time_interval;
+extern int time_interval; // fixed width of time interval eg 5 mins
 extern double speed;
 extern double travel_time_penalty;
 extern int horizon; // total no of time intervals
