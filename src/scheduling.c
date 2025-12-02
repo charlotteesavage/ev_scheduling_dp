@@ -331,7 +331,7 @@ static int is_feasible(Label *L, Activity *a)
             // } //constraint 31, do NOT need this here because we only check on activity a
         }
 
-        if (a->is_service_station)
+        if (a->is_service_station) // always have to be charging at a service station
         {
             if (!a->is_charging)
             {

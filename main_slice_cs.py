@@ -98,9 +98,10 @@ Label._fields_ = [
     ("duration", c_int),
     ("deviation_start", c_int),
     ("deviation_dur", c_int),
-    ("soc", c_double),
-    ("charge_duration", c_int),
+    ("soc_at_activity_start", c_double),
+    ("current_soc", c_double),
     ("delta_soc", c_double),
+    ("charge_duration", c_int),
     ("charge_cost", c_double),
     ("utility", c_double),
     ("mem", POINTER(Group_mem)),
@@ -305,19 +306,11 @@ def extract_schedule_data(label_pointer, activity_df, individual, num_activities
 
 
 def filter_closest(
-    all_activities, individual, num_act_to_select, constraints, activities_locations
+    all_activities, individual, num_act_to_select, activities_locations
 ):
     home = np.array((individual["home_x"], individual["home_y"]))
     work = np.array((individual["work_x"], individual["work_y"]))
     mask = np.ones(len(all_activities), dtype=bool)
-    if constraints[0]:
-        mask &= all_activities["group"] != 3
-    if constraints[1]:
-        mask &= all_activities["group"] != 3
-    if constraints[2]:
-        mask &= all_activities["group"] != 1
-    if constraints[3]:
-        mask &= all_activities["group"] != 2
 
     filtered_activities = all_activities[mask]
     filtered_locations = activities_locations[mask]
@@ -396,9 +389,8 @@ def compile_and_initialize(start, end, data_dir=None):
 
 
 def call_to_optimizer(
-    activity_csv, population_csv, scenario, constraints, num_act_to_select=15, output_dir=None
+    activity_csv, population_csv, num_act_to_select=15, output_dir=None
 ):
-    print(f"Running scenario: {scenario}")
 
     # Use provided output directory or default to current directory
     if output_dir is None:
@@ -418,7 +410,6 @@ def call_to_optimizer(
             activity_csv,
             individual,
             num_act_to_select,
-            constraints,
             activities_locations,
         )
         num_activities = len(closest_facilities) + 4
@@ -462,7 +453,7 @@ def call_to_optimizer(
                     "daily_schedule": schedules,
                 }
             )
-            output_file = os.path.join(output_dir, f"{scenario}_{LOCAL}.json")
+            output_file = os.path.join(output_dir, f"output_{LOCAL}.json")
             results.to_json(
                 output_file,
                 orient="records",
@@ -480,26 +471,22 @@ def call_to_optimizer(
 
 if __name__ == "__main__":
     n = 15
-    start_index = 0  # Start from beginning for testing
-    end_index = 10   # Small test set to verify compilation works
-
+    start_index = 0  
+    end_index = 10   
     activity_csv, population_csv, lib = compile_and_initialize(start_index, end_index)
 
     elapsed_times = []
-    for scenario_name in scenari:
-        start_time = time.time()
-        call_to_optimizer(
+    start_time = time.time()
+    call_to_optimizer(
             activity_csv,
             population_csv,
-            scenario_name,
-            constraints,
             num_act_to_select=n,
         )
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        elapsed_times.append(round(elapsed_time, 2))
-        print(
-            f"For {end_index - start_index} individuals of {LOCAL} and {n} closest activities around their home/work, the execution time of scenario {scenario_name} is {elapsed_time:.1f} seconds\n"
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    elapsed_times.append(round(elapsed_time, 2))
+    print(
+            f"For {end_index - start_index} individuals of {LOCAL} and {n} closest activities around their home/work, the execution time is {elapsed_time:.1f} seconds\n"
         )
 
     print(elapsed_times)
