@@ -67,7 +67,6 @@ struct Label
     // double delta_soc_during_interval; // SOC increase during this charging time, if occurring
     // double total_delta_soc;
     // double soc; // check this - might be parsed from individual data
-    int charge_duration;
     double delta_soc; // clarify what is meant by this cf (10)
 
     int charge_duration; // cumulative time spent charging at current activity (resets to zero when move to new activity)

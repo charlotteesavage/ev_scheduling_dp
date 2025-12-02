@@ -19,7 +19,8 @@ int time_interval;
 double speed;
 double travel_time_penalty;
 int horizon;
-int num_activities;
+// int num_activities;
+int max_num_activities; // max no of activities, to cap search
 L_list **bucket;
 Activity *activities = NULL;
 int DSSR_count;
@@ -39,6 +40,7 @@ double slow_charge_power = 7.0;
 double fast_charge_power = 22.0;
 double rapid_charge_power = 50.0;
 
+// fraction of battery charged PER TIME INTERVAL
 double slow_charge_rate;  // for power 7 kW
 double fast_charge_rate;  // for power 22 kW
 double rapid_charge_rate; // for power 50 kW
@@ -69,6 +71,9 @@ double late_parameters[5];
 double long_parameters[5];
 double short_parameters[5];
 
+// // flex params, if needed
+// int flex, mid_flex, not_flex;
+
 // new utility terms
 double gamma_charge_work = -3.59;     // inconvenience of charging at work activity
 double gamma_charge_non_work = -4.34; // inconvenience of charging at non-work activity
@@ -86,12 +91,17 @@ double get_total_time() { return total_time; }
 Label *get_final_schedule() { return final_schedule; }
 
 void initialize_charge_rates(void) // initialise these rates per eqn (39) in paper
-// these are the charge rates per HOUR
+// fraction of battery increase PER TIME INTERVAL in hours
 {
-    slow_charge_rate = slow_charge_power / battery_capacity; // fraction of battery charged per hour
-    fast_charge_rate = fast_charge_power / battery_capacity;
-    rapid_charge_rate = rapid_charge_power / battery_capacity;
+    double fraction_of_hours_per_interval = time_interval / 60;                                 // 5 min = 0.0833 hours
+    slow_charge_rate = (slow_charge_power / battery_capacity) * fraction_of_hours_per_interval; // fraction of battery charged per time_interval
+    fast_charge_rate = (fast_charge_power / battery_capacity) * fraction_of_hours_per_interval;
+    rapid_charge_rate = (rapid_charge_power / battery_capacity) * fraction_of_hours_per_interval;
 }
+
+// void initialise_charge_prices(void) // put charge prices into GBP per time interval
+// {
+// }
 
 void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_penalty, int pytime_interval,
                             double *asc, double *early, double *late, double *longp, double *shortp
@@ -102,6 +112,9 @@ void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_
     travel_time_penalty = pytravel_time_penalty;
     horizon = pyhorizon;
     time_interval = pytime_interval;
+    // flex = pyflexible;
+    // mid_flex = pymid_flex;
+    // not_flex = pynot_flex;
     initialize_charge_rates();
 
     // printf("speed = %f, travel_time_penalty = %f, curfew_time = %d, max_outside_time = %d, max_travel_time = %d, peak_hour_time1 = %d, peak_hour_time2 = %d, time_interval = %d\n",
@@ -132,7 +145,7 @@ static Label *create_label(Activity *aa)
 {
     Label *L = malloc(sizeof(Label));
     L->act_id = 0;
-    L->time = aa->min_duration;
+    L->time = aa->min_duration; // double check this, make sure it is in minutes
     L->start_time = 0;
     L->utility = 0;
     L->deviation_start = 0;
@@ -145,7 +158,12 @@ static Label *create_label(Activity *aa)
     L->mem->next = NULL;
     L->mem->previous = NULL;
 
-    L->soc = initial_soc; // check this - might be parsed from individual data
+    L->soc_at_activity_start = initial_soc; // battery state of charge at the start of activity 𝑎
+    L->current_soc = initial_soc;
+    // L->delta_soc_during_interval = 0; // SOC increase during a single time interval, if occurring
+    // L->total_delta_soc = 0; // total SOC increase over charging period so far
+
+    // L->soc = initial_soc; // check this - might be parsed from individual data
     L->charge_duration = 0;
     L->delta_soc = 0; // clarify what is meant by this cf (10)
     L->charge_cost = 0;
@@ -202,11 +220,11 @@ static void get_charge_rate_and_price(Activity *a, double result[2])
 
     case 2:
         charge_rate = slow_charge_rate;
-        if (a->group == 0)
+        if (a->activity_type == 0)
         {
             charge_price = home_slow_charge_price;
         }
-        if (a->group != 0)
+        if (a->activity_type != 0)
         {
             charge_price = AC_charge_price;
         }
@@ -283,7 +301,13 @@ static int is_feasible(Label *L, Activity *a)
         // if it is the same activity, you need the same charging state as the previous one
         if (a->is_charging)
         {
-            if (L->previous != NULL && L->previous->act->charge_mode != a->charge_mode)
+            // constraint 35
+            if (a->charge_mode == 0)
+            {
+                return 0;
+            }
+
+            if (L->previous != NULL && L->act->charge_mode != a->charge_mode)
             {
                 return 0;
             } // check continuity of charge mode, only from second activity
@@ -291,12 +315,12 @@ static int is_feasible(Label *L, Activity *a)
             // check constraint 26:
             double results[2];
             get_charge_rate_and_price(a, results);
-            double charge_rate = results[0];
+            double charge_rate = results[0]; // this is the change in SOC for the time interval
             // double charge_price = results[1];
 
-            double delta_soc = charge_rate * time_interval / 60;
+            // double delta_soc = charge_rate * time_interval / 60;
 
-            if (L->soc + delta_soc > soc_full)
+            if (L->current_soc + charge_rate > soc_full)
             {
                 return 0;
             } // constraint 26
@@ -363,26 +387,31 @@ static int is_feasible(Label *L, Activity *a)
         }
 
         // SOC constraint: must be non-negative after travel
-        double soc_after_travel = L->soc - energy_consumed_soc(L->act, a);
+        double soc_after_travel = L->current_soc - energy_consumed_soc(L->act, a);
         if (soc_after_travel < 0)
         {
             return 0;
         }
 
-        if (a->is_charging)
+        // constraint 35
+        if (a->is_charging && a->charge_mode == 0)
         {
-            double results[2];
-            get_charge_rate_and_price(a, results);
-            double charge_rate = results[0];
-            // double charge_price = results[1];
-
-            double delta_soc = charge_rate * time_interval / 60;
-
-            if (soc_after_travel + delta_soc > soc_full)
-            {
-                return 0;
-            } // constraint 26, but makes sure we don't pick an overzealous charge mode
+            return 0;
         }
+        // if (a->is_charging)
+        // {
+        //     double results[2];
+        //     get_charge_rate_and_price(a, results);
+        //     double charge_rate = results[0];
+        //     // double charge_price = results[1];
+
+        //     // double delta_soc = charge_rate * time_interval / 60;
+
+        //     if (soc_after_travel + charge_rate > soc_full)
+        //     {
+        //         return 0;
+        //     } // constraint 26, but makes sure we don't pick an overzealous charge mode
+        // }
 
         if (a->is_service_station)
 
@@ -465,107 +494,107 @@ static int dominates(Label *L1, Label *L2)
 
 /* Calculate the utility of a label based on its starting activity and the duration of the one that just finished */
 static double update_utility(Label *L)
+// make sure to check that you start a new activity in label_update before this is calculated
+// function on the basis of minutes
+// time horizons differences are multiplied to be expressed in minutes from the parameters
+
+//     group_to_type = {
+//     0: "Home",
+//     1: "Education",
+//     2: "Errands",
+//     3: "Escort",
+//     4: "Leisure",
+//     5: "Shopping",
+//     6: "Work",
+//     7: "ServiceStation",
+// }
+
+// check if charging constrants can be used to deal with service stations instead
+// time window constraints between 7am and 11pm, not allowed outside that
 {
     // should have an error term, but don't need a cost penalty
     // cost of travel is associated with EV cost only, don't account for EV tax, parking etc
     // to be listed as assumptions at beginning of paper
 
-    int group = L->act->group;
+    int activity_type = L->act->activity_type;
     Activity *act = L->act;
 
     Label *previous_L = L->previous;
     Activity *previous_act = previous_L->act;
-    int previous_group = previous_act->group;
+    int previous_activity_type = previous_act->activity_type;
 
     L->utility = previous_L->utility;
 
-    // Activity participation terms: ONLY apply when moving to NEW activity
-    if (previous_act->id != act->id)
+    L->utility += asc_parameters[activity_type];
+    L->utility += travel_time_penalty * travel_time(previous_act, act);
+
+    // service station has no duration penalties - its only penalties come from cost of charge
+    // so only apply these below to non-home and non service station activities
+
+    // PENALTY FOR FINISHING PREVIOUS ACTIVITY (duration deviation)
+    if (previous_activity_type != 0 && !previous_act->is_service_station)
     {
-        // make sure to check that you start a new activity
-        // because ASC, travel time, short, long, early and late all apply only to new acts
-        L->utility += asc_parameters[group];
-        L->utility += travel_time_penalty * travel_time(previous_act, act);
+        L->utility += short_parameters[previous_activity_type] * time_interval *
+                      fmax(0, previous_act->des_duration - previous_L->duration);
+        L->utility += long_parameters[previous_activity_type] * time_interval *
+                      fmax(0, previous_L->duration - previous_act->des_duration);
+    }
 
-        // START UTILITY OF NEW ACTIVITY
-        if (previous_group != 0)
+    // PENALTY FOR STARTING NEW ACTIVITY (timing deviation)
+    if (activity_type != 0 && !act->is_service_station)
+    {
+        L->utility += early_parameters[activity_type] * time_interval *
+                      fmax(0, act->des_start_time - L->start_time);
+        L->utility += late_parameters[activity_type] * time_interval *
+                      fmax(0, L->start_time - act->des_start_time);
+    }
+
+    // calculate the utility change from charging at finished activity
+    if (previous_act->is_charging)
+    {
+        if (previous_activity_type == 6)
         {
-            L->utility += short_parameters[previous_group] * time_interval *
-                          fmax(0, previous_act->des_duration - previous_L->duration);
-            L->utility += long_parameters[previous_group] * time_interval *
-                          fmax(0, previous_L->duration - previous_act->des_duration);
+            L->utility += gamma_charge_work;
+        }
+        else if (previous_activity_type == 0)
+        {
+            L->utility += gamma_charge_home;
+        }
+        else
+        {
+            L->utility += gamma_charge_non_work;
         }
 
-        // service station has no duration penalties, only penalties come from cost of charge - ie inc long
-        // so only apply these below to non-home and
-        // non service station activities - service station penalty is only for long
-        if (group != 0 && !act->is_service_station)
+        L->utility += theta_soc * fmax(0, soc_threshold - previous_L->soc_at_activity_start);
+        double total_delta_soc = previous_L->current_soc - previous_L->soc_at_activity_start;
+        L->utility += beta_delta_soc * total_delta_soc;
+        if (previous_L->previous != NULL) // if the previous act is not home, need to calc the charge cost
         {
-            L->utility += early_parameters[group] * time_interval *
-                          fmax(0, act->des_start_time - L->start_time);
-            L->utility += late_parameters[group] * time_interval *
-                          fmax(0, L->start_time - act->des_start_time);
+            double interval_charge_cost = previous_L->charge_cost - previous_L->previous->charge_cost;
+            L->utility += beta_charge_cost * interval_charge_cost;
         }
-
-        if (act->is_charging)
-        { // Charging utility terms, only once per activity
-            if (group == 6)
-            {
-                L->utility += gamma_charge_work;
-            }
-
-            else if (group == 0)
-            {
-                L->utility += gamma_charge_home;
-            }
-            else
-            {
-                L->utility += gamma_charge_non_work;
-            }
-            // // SOC𝑎 represents the state of charge after travel and at the start time of activity 𝑎.
-            L->utility += theta_soc * fmax(0, soc_threshold - L->soc);
-
-            // charging utility terms that need to be applied at every time interval if charging:
-            L->utility += beta_delta_soc * fmin(1 - previous_L->soc, L->delta_soc);
-            double incremental_cost = L->charge_cost - previous_L->charge_cost;
-            L->utility += beta_charge_cost * incremental_cost;
+        else
+        {
+            L->utility += beta_charge_cost * previous_L->charge_cost;
         }
     }
-    // time horizons differences are multiplied to be expressed in minutes from the parameters
 
-    //     group_to_type = {
-    //     0: "Home",
-    //     1: "Education",
-    //     2: "Errands",
-    //     3: "Escort",
-    //     4: "Leisure",
-    //     5: "Shopping",
-    //     6: "Work",
-    //     7: "ServiceStation",
-    // }
-
-    // check if charging constrants can be used to deal with service stations instead
-    // time window constraints between 7am and 11pm, not allowed outside that
-
-    // else: continuation of activity, only utility update is incremental charge changes:
-    else
-    {
-        if (act->is_charging)
-        {
-            L->utility += beta_delta_soc * fmin(1 - previous_L->soc, L->delta_soc);
-            double incremental_cost = L->charge_cost - previous_L->charge_cost;
-            L->utility += beta_charge_cost * incremental_cost;
-        }
-        // // SOC𝑎 represents the state of charge after travel and at the start time of activity 𝑎.
-        // L->utility += theta_soc * fmax(0, soc_threshold - L->soc);
-    }
     return L->utility;
 };
 
+// only go to update utility if it is a new act
+// SOC is updated in update_label
+// if charging, calculate the remaining uncharged amount, working in 5 min interval
+// calc remaining spare capacity, if it is >0 then charge until full
+// max amount of charge possible in that interval
+
 // /*  Generates a new label L based on an existing label current_label and an activity a */
 static Label *update_label_from_activity(Label *current_label, Activity *a)
-// this is also responsible for updating utilities when the activities changes
-// update SOC in here
+// This function updates labels by one time interval (5 mins)
+//   1. Check if new activity first
+//   2. If new: transition to new activity (update utility, advance timestamp, reduce SOC)
+//   3. If not new: do simple time update
+//   4. Update charging regardless of new or not
 {
     Label *new_label = malloc(sizeof(Label));
     new_label->previous = current_label;
@@ -574,60 +603,23 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
     new_label->deviation_start = current_label->deviation_start;
     new_label->deviation_dur = current_label->deviation_dur;
 
-    if (a->id == current_label->act_id) // check if the activity is a continuation of old activity
-    // no SOC discharge because no travel, only charging is possible
+    // STEP 1: Check if new activity
+    if (a->id != current_label->act_id)
     {
-        // inherit time and memory variables
-        new_label->start_time = current_label->start_time;
-        new_label->time = current_label->time + 1;
-        new_label->duration = current_label->duration + 1;
-        new_label->mem = copyLinkedList(current_label->mem);
+        // Transition to new activity:
+        // - Calculate start time (current time + travel time)
+        // - Update memory
+        // - Reduce SOC for travel
+        // - Initialize time and duration
 
-        if (a->is_charging) // need to check for where charging is free??
-        {                   // might have to put charging price back into activity class
-            new_label->charge_duration = current_label->charge_duration + 1;
-            double results[2];
-            get_charge_rate_and_price(a, results);
-            double charge_rate = results[0];
-            double charge_price = results[1];
-
-            new_label->delta_soc = fmin(1 - current_label->soc, charge_rate * (time_interval / 60.0)); // need the time interval as a fraction of an hour for the charge_rate
-            new_label->soc = current_label->soc + new_label->delta_soc;
-
-            double tou_factor = get_tou_factor(new_label->time);
-            double energy_charged_kwh = new_label->delta_soc * battery_capacity;   // need to get the actual energy charged in kwh, not as a % of battery
-            double interval_cost = charge_price * tou_factor * energy_charged_kwh; // we can now just use the price per kwh, as the energy is expressed in kwh
-            new_label->charge_cost = current_label->charge_cost + interval_cost;
-        }
-        else
-        {                                                                // not charging
-            new_label->charge_duration = current_label->charge_duration; // this is cumulative, inherit it
-            new_label->soc = current_label->soc;
-            new_label->delta_soc = 0;
-            new_label->charge_cost = current_label->charge_cost;
-        }
-        // new_label->utility = update_utility(new_label);
-    }
-
-    else // move to new activity
-    {
         new_label->start_time = current_label->time + travel_time(current_label->act, a);
-        new_label->mem = unionLinkedLists(current_label->mem, a->memory, a->group);
+        new_label->mem = unionLinkedLists(current_label->mem, a->memory, a->activity_type);
 
-        // current_label->soc already reflects all charging that has occurred up to this point
-        // No need to recalculate - just subtract travel consumption
-        double soc_consumed = energy_consumed_soc(current_label->act, a);
-        new_label->soc = current_label->soc - soc_consumed;
-
-        // if not charging, these below are all zero or unupdated
-        new_label->charge_duration = 0;
-        new_label->delta_soc = 0;
-        new_label->charge_cost = current_label->charge_cost;
-
+        // do we want the below to be by interval, or do it across min_duration???
         if (a->id == num_activities - 1)
-        {
-            new_label->duration = horizon - new_label->start_time - 1;
-            new_label->time = horizon - 1;
+        {                                                              // d'ou le saut chelou a la fin : DUSK (pas de utility pour dusk)
+            new_label->duration = horizon - new_label->start_time - 1; // set to 0 before
+            new_label->time = horizon - 1;                             // pq pas le temps actuel (pour uen 3e var de starting time)
         }
         else
         {
@@ -635,24 +627,100 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
             new_label->time = new_label->start_time + new_label->duration;
         }
 
-        // **SERVICE STATION HANDLING**: No deviation penalties
-        if (!a->is_service_station)
+        // Reduce SOC by travel consumption
+        double soc_consumed = energy_consumed_soc(current_label->act, a);
+        new_label->soc_at_activity_start = current_label->current_soc - soc_consumed;
+        new_label->current_soc = new_label->soc_at_activity_start; // initialise the soc in case of charging
+
+        // Initialize charging variables for new activity
+        new_label->charge_duration = 0;
+        new_label->delta_soc = 0;
+        new_label->charge_cost = current_label->charge_cost; // inherit cumulative charging cost
+
+        // STEP 1b: Calculate charging for first interval of new activity (if charging)
+        //  This must happen BEFORE calling update_utility so that utility calculation has access to charging data
+        //  need to adapt this to deal with the situation where
+        //  charging will be completed BEFORE activity is over
+        //  - so there will be time spent idle at the charger
+        if (a->is_charging)
         {
-            if (a->group != 0)
-            {
-                new_label->deviation_start += abs(new_label->start_time - a->des_start_time);
-            }
+            double results[2];
+            get_charge_rate_and_price(a, results);
+            double charge_rate = results[0];
+            double charge_price = results[1];
+            // double max_possible_charge = charge_rate * (time_interval / 60.0);
+            new_label->delta_soc = fmin(soc_full - new_label->current_soc, charge_rate);
+            new_label->current_soc += new_label->delta_soc;
+            new_label->charge_duration = time_interval;
+
+            // Calculate charging cost for this first interval
+            double tou_factor = get_tou_factor(new_label->start_time);
+            double energy_charged_kwh = new_label->delta_soc * battery_capacity;
+            double interval_cost = charge_price * tou_factor * energy_charged_kwh;
+            new_label->charge_cost += interval_cost;
         }
 
-        if (!current_label->act->is_service_station)
+        // Update utility ONLY when moving to new activity
+        new_label->utility = update_utility(new_label);
+
+        // Calculate deviation penalties for activity transitions
+        // **SERVICE STATION HANDLING**: No deviation penalties
+        if (!a->is_service_station && a->activity_type != 0)
         {
-            if (current_label->act->group != 0)
-            {
-                new_label->deviation_dur += abs(current_label->duration - current_label->act->des_duration);
-            }
+            new_label->deviation_start += abs(new_label->start_time - a->des_start_time);
+        }
+
+        if (!current_label->act->is_service_station && current_label->act->activity_type != 0)
+        {
+            new_label->deviation_dur += abs(current_label->duration - current_label->act->des_duration);
         }
     }
-    new_label->utility = update_utility(new_label);
+    else // SAME ACTIVITY - simple time update
+    {
+        // Continue at same activity - just advance by one time interval
+        new_label->start_time = current_label->start_time;
+        new_label->time = current_label->time + time_interval; // advance by 1 time interval
+        new_label->duration = current_label->duration + time_interval;
+        new_label->mem = copyLinkedList(current_label->mem);
+
+        // Inherit SOC and charging cost (will be updated below if charging)
+        // no decrease in SOC possible because no travel involved
+        new_label->current_soc = current_label->current_soc;
+        new_label->soc_at_activity_start = current_label->soc_at_activity_start;
+        new_label->charge_duration = current_label->charge_duration;
+        new_label->delta_soc = 0;
+        new_label->charge_cost = current_label->charge_cost;
+
+        // Utility stays the same - no update for continuing activity
+        new_label->utility = current_label->utility;
+
+        // STEP 2: Update charging for continuing activity
+        // Only update SOC and costs here - NO utility changes
+        if (a->is_charging && new_label->current_soc < soc_full)
+        {
+            new_label->charge_duration += time_interval;
+
+            double results[2];
+            get_charge_rate_and_price(a, results);
+            double charge_rate = results[0];
+            double charge_price = results[1];
+
+            // Calculate how much we can charge in this interval
+            // Limited by remaining battery capacity
+            // double max_possible_charge = charge_rate * (time_interval / 60.0);
+            new_label->delta_soc = fmin(soc_full - new_label->current_soc, charge_rate);
+            new_label->current_soc += new_label->delta_soc;
+
+            // Calculate charging cost for this interval
+            double tou_factor = get_tou_factor(new_label->time);
+            double energy_charged_kwh = new_label->delta_soc * battery_capacity;
+            double interval_cost = charge_price * tou_factor * energy_charged_kwh;
+            new_label->charge_cost += interval_cost;
+
+            // All utility changes happen only for new activities
+        }
+    }
+
     return new_label;
 }
 
@@ -717,11 +785,11 @@ int DSSR(Label *L)
         }
         while (p2 != NULL && cycle == 0)
         { //  checks for a cycle by looking for a previous label with the same group as p. If found, records the activity and group,
-            if (p2->act->group == p1->act->group)
+            if (p2->act->activity_type == p1->act->activity_type)
             {
                 cycle = 1;
                 c_activity = p1->act_id;
-                group_activity = p1->act->group;
+                group_activity = p1->act->activity_type;
             }
             p2 = p2->previous;
         }
