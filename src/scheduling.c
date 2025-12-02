@@ -160,13 +160,13 @@ static Label *create_label(Activity *aa)
 
     L->soc_at_activity_start = initial_soc; // battery state of charge at the start of activity 𝑎
     L->current_soc = initial_soc;
-    // L->delta_soc_during_interval = 0; // SOC increase during a single time interval, if occurring
-    // L->total_delta_soc = 0; // total SOC increase over charging period so far
-
-    // L->soc = initial_soc; // check this - might be parsed from individual data
     L->charge_duration = 0;
     L->delta_soc = 0; // clarify what is meant by this cf (10)
     L->charge_cost = 0;
+
+    // L->delta_soc_during_interval = 0; // SOC increase during a single time interval, if occurring
+    // L->total_delta_soc = 0; // total SOC increase over charging period so far
+    // L->soc = initial_soc; // check this - might be parsed from individual data
 
     return L;
 };
@@ -568,7 +568,7 @@ static double update_utility(Label *L)
         L->utility += theta_soc * fmax(0, soc_threshold - previous_L->soc_at_activity_start);
         double total_delta_soc = previous_L->current_soc - previous_L->soc_at_activity_start;
         L->utility += beta_delta_soc * total_delta_soc;
-        if (previous_L->previous != NULL) // if the previous act is not home, need to calc the charge cost
+        if (previous_L->previous != NULL) // if the previous act is not empty (ie it is after dawn), need to calc the charge cost
         {
             double interval_charge_cost = previous_L->charge_cost - previous_L->previous->charge_cost;
             L->utility += beta_charge_cost * interval_charge_cost;
