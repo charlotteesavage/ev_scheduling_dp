@@ -213,12 +213,12 @@ static void get_charge_rate_and_price(Activity *a, double result[2])
 
     switch (a->charge_mode)
     {
-    case 1: // not charging
+    case 0: // not charging
         charge_rate = 0;
         charge_price = 0;
         break;
 
-    case 2:
+    case 1:
         charge_rate = slow_charge_rate;
         if (a->activity_type == 0)
         {
@@ -230,12 +230,12 @@ static void get_charge_rate_and_price(Activity *a, double result[2])
         }
         break;
 
-    case 3:
+    case 2:
         charge_rate = fast_charge_rate;
         charge_price = AC_charge_price;
         break;
 
-    case 4:
+    case 3:
         charge_rate = rapid_charge_rate;
         charge_price = public_dc_charge_price;
         break;
