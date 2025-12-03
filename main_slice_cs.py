@@ -11,7 +11,6 @@ import os
 warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
 
 LOCAL = "Sheffield"
-# SCHEDULING_VERSION = 6
 TIME_INTERVAL = 5
 HORIZON = round(24 * 60 / TIME_INTERVAL) + 1
 # SPEED = 19 * 16.667  # 1km/h = 16.667 m/min
@@ -121,9 +120,9 @@ L_list._fields_ = [
 ]
 
 
-def initialize_and_personalize_activities(df, num_activities, individual):
+def initialize_and_personalize_activities(df, max_num_activities, individual):
     """Create and personalize an array of activities based on the given dataframe and individual data."""
-    activities_array = (Activity * num_activities)()
+    activities_array = (Activity * max_num_activities)()
 
     activities_array[0].id = 0
     activities_array[0].x = individual["home_x"]
@@ -134,42 +133,44 @@ def initialize_and_personalize_activities(df, num_activities, individual):
     activities_array[0].min_duration = 1
     activities_array[0].group = 0
 
-    activities_array[num_activities - 1].id = num_activities - 1
-    activities_array[num_activities - 1].x = individual["home_x"]
-    activities_array[num_activities - 1].y = individual["home_y"]
-    activities_array[num_activities - 1].earliest_start = 0
-    activities_array[num_activities - 1].latest_start = HORIZON - 2
-    activities_array[num_activities - 1].max_duration = HORIZON - 2
-    activities_array[num_activities - 1].min_duration = 1
-    activities_array[num_activities - 1].group = 0
+    activities_array[max_num_activities - 1].id = max_num_activities - 1
+    activities_array[max_num_activities - 1].x = individual["home_x"]
+    activities_array[max_num_activities - 1].y = individual["home_y"]
+    activities_array[max_num_activities - 1].earliest_start = 0
+    activities_array[max_num_activities - 1].latest_start = HORIZON - 2
+    activities_array[max_num_activities - 1].max_duration = HORIZON - 2
+    activities_array[max_num_activities - 1].min_duration = 1
+    activities_array[max_num_activities - 1].group = 0
 
-    activities_array[num_activities - 2].id = num_activities - 2
-    activities_array[num_activities - 2].x = individual["home_x"]
-    activities_array[num_activities - 2].y = individual["home_y"]
-    activities_array[num_activities - 2].earliest_start = 0
-    activities_array[num_activities - 2].latest_start = HORIZON
-    activities_array[num_activities - 2].max_duration = HORIZON - 2
-    activities_array[num_activities - 2].min_duration = 1
-    activities_array[num_activities - 2].des_duration = 0
-    activities_array[num_activities - 2].des_start_time = 0
-    activities_array[num_activities - 2].group = 0
+    activities_array[max_num_activities - 2].id = max_num_activities - 2
+    activities_array[max_num_activities - 2].x = individual["home_x"]
+    activities_array[max_num_activities - 2].y = individual["home_y"]
+    activities_array[max_num_activities - 2].earliest_start = 0
+    activities_array[max_num_activities - 2].latest_start = HORIZON
+    activities_array[max_num_activities - 2].max_duration = HORIZON - 2
+    activities_array[max_num_activities - 2].min_duration = 1
+    activities_array[max_num_activities - 2].des_duration = 0
+    activities_array[max_num_activities - 2].des_start_time = 0
+    activities_array[max_num_activities - 2].group = 0
 
-    activities_array[num_activities - 3].id = num_activities - 3
-    activities_array[num_activities - 3].x = individual["work_x"]
-    activities_array[num_activities - 3].y = individual["work_y"]
-    activities_array[num_activities - 3].earliest_start = round(
+    activities_array[max_num_activities - 3].id = max_num_activities - 3
+    activities_array[max_num_activities - 3].x = individual["work_x"]
+    activities_array[max_num_activities - 3].y = individual["work_y"]
+    activities_array[max_num_activities - 3].earliest_start = round(
         5 * 60 / TIME_INTERVAL
     )  # 5h
-    activities_array[num_activities - 3].latest_start = round(
+    activities_array[max_num_activities - 3].latest_start = round(
         23 * 60 / TIME_INTERVAL
     )  # 23h
-    activities_array[num_activities - 3].max_duration = round(
+    activities_array[max_num_activities - 3].max_duration = round(
         12 * 60 / TIME_INTERVAL
     )  # 12h
-    activities_array[num_activities - 3].min_duration = round(10 / TIME_INTERVAL)  # 10m
-    activities_array[num_activities - 3].group = 2
-    activities_array[num_activities - 3].des_duration = individual["Work_dur"]
-    activities_array[num_activities - 3].des_start_time = individual["Work_start"]
+    activities_array[max_num_activities - 3].min_duration = round(
+        10 / TIME_INTERVAL
+    )  # 10m
+    activities_array[max_num_activities - 3].group = 2
+    activities_array[max_num_activities - 3].des_duration = individual["Work_dur"]
+    activities_array[max_num_activities - 3].des_start_time = individual["Work_start"]
 
     for index, row in df.iterrows():
         activity_index = index + 1
@@ -225,7 +226,7 @@ def compile_code():
     # Define paths
     src_dir = os.path.join(current_dir, "src")
     inc_dir = os.path.join(current_dir, "include")
-    output_lib = os.path.join(current_dir, "scheduling_CS.so")
+    output_lib = os.path.join(current_dir, "scheduling.so")
 
     # Source files to compile
     sources = [
@@ -490,7 +491,8 @@ if __name__ == "__main__":
         )
 
     print(elapsed_times)
-    print("Creating the Post-processed files...")
+    print("Done??")
+    # print("Creating the Post-processed files...")
     # Post_processing_slice.create_postprocess_files(
     #     LOCAL, TIME_INTERVAL, scenari, end_index
     # )
