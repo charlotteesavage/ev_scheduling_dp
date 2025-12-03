@@ -124,6 +124,7 @@ def initialize_and_personalize_activities(df, max_num_activities, individual):
     """Create and personalize an array of activities based on the given dataframe and individual data."""
     activities_array = (Activity * max_num_activities)()
 
+    # Dawn activity
     activities_array[0].id = 0
     activities_array[0].x = individual["home_x"]
     activities_array[0].y = individual["home_y"]
@@ -133,6 +134,7 @@ def initialize_and_personalize_activities(df, max_num_activities, individual):
     activities_array[0].min_duration = 1
     activities_array[0].group = 0
 
+    # Dusk activity
     activities_array[max_num_activities - 1].id = max_num_activities - 1
     activities_array[max_num_activities - 1].x = individual["home_x"]
     activities_array[max_num_activities - 1].y = individual["home_y"]
@@ -142,6 +144,7 @@ def initialize_and_personalize_activities(df, max_num_activities, individual):
     activities_array[max_num_activities - 1].min_duration = 1
     activities_array[max_num_activities - 1].group = 0
 
+    # Home activity - return home before dusk
     activities_array[max_num_activities - 2].id = max_num_activities - 2
     activities_array[max_num_activities - 2].x = individual["home_x"]
     activities_array[max_num_activities - 2].y = individual["home_y"]
@@ -153,6 +156,7 @@ def initialize_and_personalize_activities(df, max_num_activities, individual):
     activities_array[max_num_activities - 2].des_start_time = 0
     activities_array[max_num_activities - 2].group = 0
 
+    # Work activity
     activities_array[max_num_activities - 3].id = max_num_activities - 3
     activities_array[max_num_activities - 3].x = individual["work_x"]
     activities_array[max_num_activities - 3].y = individual["work_y"]
@@ -172,6 +176,7 @@ def initialize_and_personalize_activities(df, max_num_activities, individual):
     activities_array[max_num_activities - 3].des_duration = individual["Work_dur"]
     activities_array[max_num_activities - 3].des_start_time = individual["Work_start"]
 
+    # all other activitites
     for index, row in df.iterrows():
         activity_index = index + 1
         activities_array[activity_index].id = activity_index

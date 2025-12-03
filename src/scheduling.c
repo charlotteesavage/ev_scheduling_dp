@@ -238,11 +238,11 @@ static void get_charge_rate_and_price(Activity *a, double result[2])
 
     case 1: // slow charging
         charge_rate = slow_charge_rate;
-        if (a->activity_type == 0)
+        if (a->group == 0)
         {
             charge_price = home_slow_charge_price;
         }
-        if (a->activity_type != 0)
+        if (a->group != 0)
         {
             charge_price = AC_charge_price;
         }
@@ -534,12 +534,12 @@ static double update_utility(Label *L)
     // cost of travel is associated with EV cost only, don't account for EV tax, parking etc
     // to be listed as assumptions at beginning of paper
 
-    int activity_type = L->act->activity_type;
+    int activity_type = L->act->group;
     Activity *act = L->act;
 
     Label *previous_L = L->previous;
     Activity *previous_act = previous_L->act;
-    int previous_activity_type = previous_act->activity_type;
+    int previous_activity_type = previous_act->group;
 
     L->utility = previous_L->utility;
 
@@ -631,7 +631,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
         // - Initialize time and duration
 
         new_label->start_time = current_label->time + travel_time(current_label->act, a);
-        new_label->mem = unionLinkedLists(current_label->mem, a->memory, a->activity_type);
+        new_label->mem = unionLinkedLists(current_label->mem, a->memory, a->group);
 
         // do we want the below to be by interval, or do it across min_duration???
         if (a->id == max_num_activities - 1)
@@ -683,12 +683,12 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
 
         // Calculate deviation penalties for activity transitions
         // **SERVICE STATION HANDLING**: No deviation penalties
-        if (!a->is_service_station && a->activity_type != 0)
+        if (!a->is_service_station && a->group != 0)
         {
             new_label->deviation_start += abs(new_label->start_time - a->des_start_time);
         }
 
-        if (!current_label->act->is_service_station && current_label->act->activity_type != 0)
+        if (!current_label->act->is_service_station && current_label->act->group != 0)
         {
             new_label->deviation_dur += abs(current_label->duration - current_label->act->des_duration);
         }
@@ -803,11 +803,11 @@ int DSSR(Label *L)
         }
         while (p2 != NULL && cycle == 0)
         { //  checks for a cycle by looking for a previous label with the same group as p. If found, records the activity and group,
-            if (p2->act->activity_type == p1->act->activity_type)
+            if (p2->act->group == p1->act->group)
             {
                 cycle = 1;
                 c_activity = p1->act_id;
-                group_activity = p1->act->activity_type;
+                group_activity = p1->act->group;
             }
             p2 = p2->previous;
         }

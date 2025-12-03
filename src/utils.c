@@ -15,7 +15,7 @@ void recursive_print(Label *L)
         {
             recursive_print(L->previous);
         }
-        printf("(act = %d, type = %d, start = %d, duration = %d, time = %d), ", L->act_id, L->act->activity_type, L->start_time, L->duration, L->time);
+        printf("(act = %d, type/group_no = %d, start = %d, duration = %d, time = %d), ", L->act_id, L->act->group, L->start_time, L->duration, L->time);
     }
 };
 
@@ -257,13 +257,13 @@ void add_memory(int at, int c)
     modifier la fonction et faire un print de s'ils sont differents seulement !!*/
 int contains(Label *L, Activity *a)
 {
-    if (a->activity_type == 0)
+    if (a->group == 0)
     {
         return 0;
     }
     while (L != NULL)
     {
-        if ((L->act->activity_type == a->activity_type) && (L->act->id != a->id))
+        if ((L->act->group == a->group) && (L->act->id != a->id))
         {             // L->act->id = L->acity
             return 1; // If there's a match, the function returns 1 (true)
         }
@@ -276,14 +276,14 @@ int contains(Label *L, Activity *a)
 // blocks adding an activity if its activity_type is already in memory
 int mem_contains(Label *L, Activity *a)
 {
-    if (a->activity_type == 0)
+    if (a->group == 0)
     {
         return 0;
     }
     Group_mem *gg = L->mem; // see if the group memory in Label matches the activity_type of a.
     while (gg != NULL)
     {
-        if (gg->g == a->activity_type)
+        if (gg->g == a->group)
         {
             return 1;
         } // Returns 1 if there is a match

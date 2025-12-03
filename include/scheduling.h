@@ -30,7 +30,7 @@ typedef struct Activity
     int max_duration;   // expressed in # of time intervals
     int x;
     int y;
-    int activity_type; // this is the activity type
+    int group; // this is the activity type
     Group_mem *memory;
     int des_duration;   // expressed in # of time intervals
     int des_start_time; // expressed in # of time intervals
