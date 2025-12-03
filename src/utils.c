@@ -82,7 +82,7 @@ void free_bucket()
 {
     for (int i = 0; i < horizon; i++)
     {
-        for (int j = 0; j < num_activities; j++)
+        for (int j = 0; j < max_num_activities; j++)
         {
             L_list *L = &bucket[i][j];
             delete_list(L);

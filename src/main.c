@@ -19,11 +19,11 @@ int main(int argc, char *argv[])
 
     // it's populating or updating the "bucket" with feasible solutions or labels
     // bucket = pour chaque time horizon et pour chaque activite, voici un schedule ?
-    create_bucket(horizon, num_activities);
+    create_bucket(horizon, max_num_activities);
     DP();
 
     // It's presumably the final set of solutions or labels that the algorithm is interested in
-    L_list *li = &bucket[horizon - 1][num_activities - 1]; // li points to last element of bucket (pointer of pointer)
+    L_list *li = &bucket[horizon - 1][max_num_activities - 1]; // li points to last element of bucket (pointer of pointer)
                                                            // ie la liste de label ou la journee est finie par la derniere activitee DUSK
 
     DSSR_count = 0;
@@ -32,14 +32,14 @@ int main(int argc, char *argv[])
         // while(DSSR_count < 10 && DSSR(find_best(li, 1))){
         // printf("\n While loop");
         free_bucket();
-        create_bucket(horizon, num_activities);
+        create_bucket(horizon, max_num_activities);
         DP();
         DSSR_count++;
         // if(DSSR_count >= 40){  // If we've reached the maximum count, break out of the loop
         //     printf("\n Maximum DSSR_count reached.");
         //     break;
         // }
-        li = &bucket[horizon - 1][num_activities - 1];
+        li = &bucket[horizon - 1][max_num_activities - 1];
     };
 
     final_schedule = find_best(li, 0);

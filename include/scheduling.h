@@ -99,7 +99,7 @@ extern int time_interval; // fixed width of time interval eg 5 mins
 extern double speed;
 extern double travel_time_penalty;
 extern int horizon; // total no of time intervals
-extern int num_activities;
+extern int max_num_activities;
 extern L_list **bucket;
 extern Activity *activities;
 extern int DSSR_count;
