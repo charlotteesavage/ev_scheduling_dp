@@ -53,6 +53,11 @@ double public_dc_charge_price = 0.79; // GBP/kWh
 double free_charging = 0;             // when charging is free
 // https://www.which.co.uk/reviews/new-and-used-cars/article/electric-car-charging-guide/how-much-does-it-cost-to-charge-an-electric-car-a8f4g1o7JzXj
 
+// // put in the below for faster price calcuations in the label creation
+// double home_slow_charge_price_per_interval; // GBP/kWh, for a battery of 60 kWh
+// double AC_charge_price_per_interval;        // GBP/kWh
+// double public_dc_charge_price_per_interval; // GBP/kWh
+
 double tou_peak_factor = 1.5;
 double tou_midpeak_factor = 2.5;
 double tou_offpeak_factor = 1;
@@ -137,7 +142,7 @@ void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_
 void set_activities(Activity *activities_data, int pynum_activities)
 {
     activities = activities_data;
-    num_activities = pynum_activities;
+    max_num_activities = pynum_activities;
 }
 
 /* Allocates memory for and initializes a new Label with the specified Activity */
@@ -218,7 +223,7 @@ static void get_charge_rate_and_price(Activity *a, double result[2])
         charge_price = 0;
         break;
 
-    case 1:
+    case 1: //slow charging
         charge_rate = slow_charge_rate;
         if (a->activity_type == 0)
         {
@@ -230,12 +235,12 @@ static void get_charge_rate_and_price(Activity *a, double result[2])
         }
         break;
 
-    case 2:
+    case 2: // fast charging
         charge_rate = fast_charge_rate;
         charge_price = AC_charge_price;
         break;
 
-    case 3:
+    case 3: // rapid charging
         charge_rate = rapid_charge_rate;
         charge_price = public_dc_charge_price;
         break;
@@ -350,7 +355,7 @@ static int is_feasible(Label *L, Activity *a)
         { // is the previous activity the same as a ? pas sur de l'interet
             return 0;
         }
-        if (L->act_id == num_activities - 1)
+        if (L->act_id == max_num_activities - 1)
         { // Ensuring the current activity isn't the last one
             return 0;
         }
@@ -363,7 +368,7 @@ static int is_feasible(Label *L, Activity *a)
         // current time + travel_time for a + min duration for a + time for returning home > end of horizon
         // Ie enough time left in the horizon to add this activity
         if (L->time + tt + a->min_duration +
-                travel_time(a, &activities[num_activities - 1]) >=
+                travel_time(a, &activities[max_num_activities - 1]) >=
             horizon - 1)
         {
             return 0;
@@ -616,7 +621,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
         new_label->mem = unionLinkedLists(current_label->mem, a->memory, a->activity_type);
 
         // do we want the below to be by interval, or do it across min_duration???
-        if (a->id == num_activities - 1)
+        if (a->id == max_num_activities - 1)
         {                                                              // d'ou le saut chelou a la fin : DUSK (pas de utility pour dusk)
             new_label->duration = horizon - new_label->start_time - 1; // set to 0 before
             new_label->time = horizon - 1;                             // pq pas le temps actuel (pour uen 3e var de starting time)
@@ -774,7 +779,7 @@ int DSSR(Label *L)
 
     while (p1 != NULL && cycle == 0)
     { // iterates through the labels starting from L in the reverse direction until it reaches the beginning
-        while (p1 != NULL && (p1->act_id == num_activities - 1 || p1->act_id == num_activities - 2))
+        while (p1 != NULL && (p1->act_id == max_num_activities - 1 || p1->act_id == max_num_activities - 2))
         { // skips labels that correspond to the last activity // group == 0 ?
             p1 = p1->previous;
         }
@@ -827,7 +832,7 @@ void DP()
 
     for (int h = ll->time; h < horizon - 1; h++) // for all time intervals from 0 to 288 (horizon = 289, the number of 5 min intervals in a day)
     {
-        for (int act_index = 0; act_index < num_activities; act_index++) // for each activity in num_activities
+        for (int act_index = 0; act_index < max_num_activities; act_index++) // for each activity in num_activities
         {
             L_list *list = &bucket[h][act_index]; // create a linked list node,
             // get all labels at state (h, act_index)
@@ -840,7 +845,7 @@ void DP()
 
                 Label *L = list->element; // for the current label in the l_list
 
-                for (int a1 = 0; a1 < num_activities; a1++)
+                for (int a1 = 0; a1 < max_num_activities; a1++)
                 { // for all the activities
 
                     if (is_feasible(L, &activities[a1]))
