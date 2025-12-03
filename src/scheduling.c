@@ -18,7 +18,7 @@
 int time_interval;
 double speed;
 double travel_time_penalty;
-int horizon;
+int horizon; // total number of time intervals, eg (24*60)/5 = 288
 // int num_activities;
 int max_num_activities; // max no of activities, to cap search
 L_list **bucket;
@@ -53,11 +53,6 @@ double public_dc_charge_price = 0.79; // GBP/kWh
 double free_charging = 0;             // when charging is free
 // https://www.which.co.uk/reviews/new-and-used-cars/article/electric-car-charging-guide/how-much-does-it-cost-to-charge-an-electric-car-a8f4g1o7JzXj
 
-// // put in the below for faster price calcuations in the label creation
-// double home_slow_charge_price_per_interval; // GBP/kWh, for a battery of 60 kWh
-// double AC_charge_price_per_interval;        // GBP/kWh
-// double public_dc_charge_price_per_interval; // GBP/kWh
-
 double tou_peak_factor = 1.5;
 double tou_midpeak_factor = 2.5;
 double tou_offpeak_factor = 1;
@@ -68,6 +63,13 @@ int midpeak1_start = 8;  // 8:00
 int midpeak1_end = 12;   // 12:00
 int midpeak2_start = 18; // 18:00
 int midpeak2_end = 21;   // 21:00
+
+int peak_start_interval;
+int peak_end_interval;
+int midpeak1_start_interval;
+int midpeak1_end_interval;
+int midpeak2_start_interval;
+int midpeak2_end_interval;
 
 /// utility_parameters
 double asc_parameters[5];
@@ -95,6 +97,16 @@ int get_count() { return DSSR_count; }
 double get_total_time() { return total_time; }
 Label *get_final_schedule() { return final_schedule; }
 
+void initialise_tou_times_intervals(void)
+{
+    peak_start_interval = (peak_start * 60) / time_interval;
+    peak_end_interval = (peak_end * 60) / time_interval;
+    midpeak1_start_interval = (midpeak1_start * 60) / time_interval;
+    midpeak1_end_interval = (midpeak1_end * 60) / time_interval;
+    midpeak2_start_interval = (midpeak2_start * 60) / time_interval;
+    midpeak2_end_interval = (midpeak2_end * 60) / time_interval;
+}
+
 void initialize_charge_rates(void) // initialise these rates per eqn (39) in paper
 // fraction of battery increase PER TIME INTERVAL in hours
 {
@@ -121,6 +133,7 @@ void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_
     // mid_flex = pymid_flex;
     // not_flex = pynot_flex;
     initialize_charge_rates();
+    initialise_tou_times_intervals();
 
     // printf("speed = %f, travel_time_penalty = %f, curfew_time = %d, max_outside_time = %d, max_travel_time = %d, peak_hour_time1 = %d, peak_hour_time2 = %d, time_interval = %d\n",
     //         speed, travel_time_penalty, curfew_time, max_outside_time, max_travel_time, peak_hour_time1,
@@ -189,7 +202,7 @@ static double distance_x(Activity *a1, Activity *a2) // this will change as we w
     return dist;
 };
 
-static int travel_time(Activity *a1, Activity *a2)
+static int travel_time(Activity *a1, Activity *a2) // returns travel time in no of intervals
 {
     double dist = distance_x(a1, a2); // this will change too
     int time = (int)(dist / speed);
@@ -210,7 +223,7 @@ static double energy_consumed_soc(Activity *a1, Activity *a2) // energy consumed
 };
 
 static void get_charge_rate_and_price(Activity *a, double result[2])
-// need to make sure label charge modes are parsed to ints per .h file for this to work
+// need to make sure activity charge modes are parsed to ints for this to work
 // all charge rates are in % terms of battery capacity, not absolute terms
 {
     double charge_rate = 0.0;
@@ -223,7 +236,7 @@ static void get_charge_rate_and_price(Activity *a, double result[2])
         charge_price = 0;
         break;
 
-    case 1: //slow charging
+    case 1: // slow charging
         charge_rate = slow_charge_rate;
         if (a->activity_type == 0)
         {
@@ -251,13 +264,13 @@ static void get_charge_rate_and_price(Activity *a, double result[2])
 
 static double get_tou_factor(int time)
 {
-    int hour = (time * time_interval) / 60; // gives the time in 24hour standard
+    // double hour = (time * time_interval) / 60; // gives the time in 24hour standard
 
-    if (hour >= peak_start && hour < peak_end)
+    if (time >= peak_start_interval && time < peak_end_interval)
     {
         return tou_peak_factor;
     }
-    else if ((hour >= midpeak1_start && hour < midpeak1_end) || (hour >= midpeak2_start && hour < midpeak2_end))
+    else if ((time >= midpeak1_start_interval && time < midpeak1_end_interval) || (time >= midpeak2_start_interval && time < midpeak2_end_interval))
     {
         return tou_midpeak_factor;
     }
@@ -656,7 +669,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
             // double max_possible_charge = charge_rate * (time_interval / 60.0);
             new_label->delta_soc = fmin(soc_full - new_label->current_soc, charge_rate);
             new_label->current_soc += new_label->delta_soc;
-            new_label->charge_duration = time_interval;
+            new_label->charge_duration = 1;
 
             // Calculate charging cost for this first interval
             double tou_factor = get_tou_factor(new_label->start_time);
@@ -684,8 +697,8 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
     {
         // Continue at same activity - just advance by one time interval
         new_label->start_time = current_label->start_time;
-        new_label->time = current_label->time + time_interval; // advance by 1 time interval
-        new_label->duration = current_label->duration + time_interval;
+        new_label->time = current_label->time + 1; // advance by 1 time interval
+        new_label->duration = current_label->duration + 1;
         new_label->mem = copyLinkedList(current_label->mem);
 
         // Inherit SOC and charging cost (will be updated below if charging)
@@ -703,7 +716,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
         // Only update SOC and costs here - NO utility changes
         if (a->is_charging && new_label->current_soc < soc_full)
         {
-            new_label->charge_duration += time_interval;
+            new_label->charge_duration += 1;
 
             double results[2];
             get_charge_rate_and_price(a, results);
@@ -832,7 +845,7 @@ void DP()
 
     for (int h = ll->time; h < horizon - 1; h++) // for all time intervals from 0 to 288 (horizon = 289, the number of 5 min intervals in a day)
     {
-        for (int act_index = 0; act_index < max_num_activities; act_index++) // for each activity in num_activities
+        for (int act_index = 0; act_index < max_num_activities; act_index++) // for each activity in max_num_activities
         {
             L_list *list = &bucket[h][act_index]; // create a linked list node,
             // get all labels at state (h, act_index)

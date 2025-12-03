@@ -24,16 +24,16 @@ typedef struct Activity
 // id encompasses unique combo of type, charging mode, and location!!!!
 {
     int id; // this is a unique node identifier, different from group_id
-    int earliest_start;
-    int latest_start;
-    int min_duration;
-    int max_duration;
+    int earliest_start; // expressed in # of time intervals
+    int latest_start;   // expressed in # of time intervals
+    int min_duration;   // expressed in # of time intervals
+    int max_duration;   // expressed in # of time intervals
     int x;
     int y;
     int activity_type; // this is the activity type
     Group_mem *memory;
-    int des_duration;
-    int des_start_time;
+    int des_duration;   // expressed in # of time intervals
+    int des_start_time; // expressed in # of time intervals
 
     int charge_mode; // Charging mode: 0=none, 1=slow, 2=fast, 3=rapid
     int is_charging; // Is charging selected? 1 for yes, 0 for no
