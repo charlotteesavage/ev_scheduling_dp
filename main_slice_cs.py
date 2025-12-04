@@ -101,7 +101,8 @@ Label._fields_ = [
     ("current_soc", c_double),
     ("delta_soc", c_double),
     ("charge_duration", c_int),
-    ("charge_cost", c_double),
+    ("charge_cost_at_activity_start", c_double),
+    ("current_charge_cost", c_double),
     ("utility", c_double),
     ("mem", POINTER(Group_mem)),
     ("previous", POINTER(Label)),
@@ -133,6 +134,10 @@ def initialize_and_personalize_activities(df, max_num_activities, individual):
     activities_array[0].max_duration = HORIZON - 2
     activities_array[0].min_duration = 1
     activities_array[0].group = 0
+    activities_array[0].des_duration = 0
+    activities_array[0].des_start_time = 0
+    activities_array[0].charge_mode = individual["charge_mode"]
+    activities_array[0].is_charging = individual["is_charging"]
 
     # Dusk activity
     activities_array[max_num_activities - 1].id = max_num_activities - 1
@@ -143,6 +148,10 @@ def initialize_and_personalize_activities(df, max_num_activities, individual):
     activities_array[max_num_activities - 1].max_duration = HORIZON - 2
     activities_array[max_num_activities - 1].min_duration = 1
     activities_array[max_num_activities - 1].group = 0
+    activities_array[max_num_activities - 1].des_duration = 0
+    activities_array[max_num_activities - 1].des_start_time = 0
+    activities_array[max_num_activities - 1].charge_mode = individual["charge_mode"]
+    activities_array[max_num_activities - 1].is_charging = individual["is_charging"]
 
     # Home activity - return home before dusk
     activities_array[max_num_activities - 2].id = max_num_activities - 2
@@ -155,6 +164,8 @@ def initialize_and_personalize_activities(df, max_num_activities, individual):
     activities_array[max_num_activities - 2].des_duration = 0
     activities_array[max_num_activities - 2].des_start_time = 0
     activities_array[max_num_activities - 2].group = 0
+    activities_array[max_num_activities - 2].charge_mode = individual["charge_mode"]
+    activities_array[max_num_activities - 2].is_charging = individual["is_charging"]
 
     # Work activity
     activities_array[max_num_activities - 3].id = max_num_activities - 3
