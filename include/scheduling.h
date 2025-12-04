@@ -48,9 +48,9 @@ typedef struct Activity
 
 typedef struct Label Label; // holds data about a particular state or decision at a certain step in the process
 struct Label
-{                   // like a tree
-    int act_id;     // additional activity identifier ? (faster than L->act->id)
-    int time;       // current time in minutes since midnight
+{
+    int act_id;     // unique activity identifier (faster than L->act->id)
+    int time;       // current time in number of intervals since dawn
     int start_time; // lets you compute the start time penalty (early/late) and check the activity's time window
     // ^^ feeds the cost update when you enter a *new* activity
     int duration; // time since the start of current activity in minutes
@@ -67,7 +67,7 @@ struct Label
     // double delta_soc_during_interval; // SOC increase during this charging time, if occurring
     // double total_delta_soc;
     // double soc; // check this - might be parsed from individual data
-    double delta_soc; // clarify what is meant by this cf (10)
+    double delta_soc; // amount of battery charge increase at a single interval, expressed as % of battery capacity i.e. SOC
 
     int charge_duration; // cumulative time spent charging at current activity (resets to zero when move to new activity)
 
