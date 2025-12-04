@@ -374,7 +374,7 @@ static int is_feasible(Label *L, Activity *a)
             return 0;
         }
         if (L->duration < L->act->min_duration)
-        { // Verifying the minimum duration of the current activity
+        { // Verifying the user has remained for minimum duration of the current activity
             return 0;
         }
 
