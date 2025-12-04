@@ -180,7 +180,8 @@ static Label *create_label(Activity *aa)
     L->current_soc = initial_soc;
     L->charge_duration = 0;
     L->delta_soc = 0; // clarify what is meant by this cf (10)
-    L->charge_cost = 0;
+    L->charge_cost_at_activity_start = 0;
+    L->current_charge_cost = 0;
 
     // L->delta_soc_during_interval = 0; // SOC increase during a single time interval, if occurring
     // L->total_delta_soc = 0; // total SOC increase over charging period so far
@@ -325,10 +326,10 @@ static int is_feasible(Label *L, Activity *a)
                 return 0;
             }
 
-            if (L->previous != NULL && L->act->charge_mode != a->charge_mode)
-            {
-                return 0;
-            } // check continuity of charge mode, only from second activity
+            // if (L->previous != NULL && L->act->charge_mode != a->charge_mode)
+            // {
+            //     return 0;
+            // } // check continuity of charge mode, only from second activity
 
             // check constraint 26:
             double results[2];
@@ -588,12 +589,12 @@ static double update_utility(Label *L)
         L->utility += beta_delta_soc * total_delta_soc;
         if (previous_L->previous != NULL) // if the previous act is not empty (ie it is after dawn), need to calc the charge cost
         {
-            double interval_charge_cost = previous_L->charge_cost - previous_L->previous->charge_cost;
-            L->utility += beta_charge_cost * interval_charge_cost;
+            double activity_charge_cost = previous_L->current_charge_cost - previous_L->charge_cost_at_activity_start;
+            L->utility += beta_charge_cost * activity_charge_cost;
         }
         else
         {
-            L->utility += beta_charge_cost * previous_L->charge_cost;
+            L->utility += beta_charge_cost * previous_L->current_charge_cost;
         }
     }
 
@@ -620,6 +621,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
     new_label->act_id = a->id;
     new_label->deviation_start = current_label->deviation_start;
     new_label->deviation_dur = current_label->deviation_dur;
+    new_label->current_charge_cost = current_label->current_charge_cost; // inherit cumulative charging cost
 
     // STEP 1: Check if new activity
     if (a->id != current_label->act_id)
@@ -641,7 +643,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
         }
         else
         {
-            new_label->duration = a->min_duration;
+            new_label->duration = 1;
             new_label->time = new_label->start_time + new_label->duration;
         }
 
@@ -653,8 +655,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
         // Initialize charging variables for new activity
         new_label->charge_duration = 0;
         new_label->delta_soc = 0;
-        new_label->charge_cost = current_label->charge_cost; // inherit cumulative charging cost
-
+        new_label->charge_cost_at_activity_start = current_label->current_charge_cost;
         // STEP 1b: Calculate charging for first interval of new activity (if charging)
         //  This must happen BEFORE calling update_utility so that utility calculation has access to charging data
         //  need to adapt this to deal with the situation where
@@ -675,7 +676,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
             double tou_factor = get_tou_factor(new_label->start_time);
             double energy_charged_kwh = new_label->delta_soc * battery_capacity;
             double interval_cost = charge_price * tou_factor * energy_charged_kwh;
-            new_label->charge_cost += interval_cost;
+            new_label->current_charge_cost += interval_cost;
         }
 
         // Update utility ONLY when moving to new activity
@@ -706,8 +707,8 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
         new_label->current_soc = current_label->current_soc;
         new_label->soc_at_activity_start = current_label->soc_at_activity_start;
         new_label->charge_duration = current_label->charge_duration;
-        new_label->delta_soc = 0;
-        new_label->charge_cost = current_label->charge_cost;
+        new_label->delta_soc = 0;                                                                // change in charging per interval
+        new_label->charge_cost_at_activity_start = current_label->charge_cost_at_activity_start; // inherit this state
 
         // Utility stays the same - no update for continuing activity
         new_label->utility = current_label->utility;
@@ -733,7 +734,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
             double tou_factor = get_tou_factor(new_label->time);
             double energy_charged_kwh = new_label->delta_soc * battery_capacity;
             double interval_cost = charge_price * tou_factor * energy_charged_kwh;
-            new_label->charge_cost += interval_cost;
+            new_label->current_charge_cost += interval_cost;
 
             // All utility changes happen only for new activities
         }

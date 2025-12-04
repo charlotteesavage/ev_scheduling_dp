@@ -72,8 +72,8 @@ struct Label
     int charge_duration; // cumulative time spent charging at current activity (resets to zero when move to new activity)
 
     // double wasted_charger_time;
-
-    double charge_cost; // cumulative charging cost over whole day
+    double charge_cost_at_activity_start; // cumulative charge cost at the start of activity 𝑎
+    double current_charge_cost; // cumulative charging cost up to end of current interval
 
     double utility; // cumulative utility
 
