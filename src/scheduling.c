@@ -33,8 +33,11 @@ double soc_full = 1.0;
 double soc_threshold = 0.3;           // in %, minimum for comfort
 double energy_consumption_rate = 0.2; // kwh_per_km
 
-double initial_soc = 1.0; // this is pulled from a uniform distribution
-// uniform dist between 0.3 and 1, with option to go below 0.3 for small %
+// Initial SOC parameters for normal distribution
+unsigned int seed = 42; // Fixed seed for reproducibility (use time(NULL) for random each run)
+double initial_soc_mean = 0.60;    // 60% average starting SOC
+double initial_soc_std_dev = 0.10; // 10% standard deviation 
+double initial_soc; // Will be set using normal_random() in create_label()
 
 double slow_charge_power = 7.0;
 double fast_charge_power = 22.0;
@@ -110,15 +113,24 @@ void initialise_tou_times_intervals(void)
 void initialize_charge_rates(void) // initialise these rates per eqn (39) in paper
 // fraction of battery increase PER TIME INTERVAL in hours
 {
-    double fraction_of_hours_per_interval = time_interval / 60;                                 // 5 min = 0.0833 hours
+    double fraction_of_hours_per_interval = time_interval / 60.0;                                 // 5 min = 0.0833 hours
     slow_charge_rate = (slow_charge_power / battery_capacity) * fraction_of_hours_per_interval; // fraction of battery charged per time_interval
     fast_charge_rate = (fast_charge_power / battery_capacity) * fraction_of_hours_per_interval;
     rapid_charge_rate = (rapid_charge_power / battery_capacity) * fraction_of_hours_per_interval;
 }
 
-// void initialise_charge_prices(void) // put charge prices into GBP per time interval
-// {
-// }
+double initialise_SOC(unsigned int seed_val)
+{
+    seed_random(seed_val);
+    double output;
+    output = normal_random(initial_soc_mean, initial_soc_std_dev);
+
+    // Clamp to valid SOC range [0.0, 1.0]
+    if (output < 0.0) output = 0.0;
+    if (output > 1.0) output = 1.0;
+
+    return output;
+}
 
 void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_penalty, int pytime_interval,
                             double *asc, double *early, double *late, double *longp, double *shortp
@@ -176,6 +188,8 @@ static Label *create_label(Activity *aa)
     L->mem->next = NULL;
     L->mem->previous = NULL;
 
+    // Generate random initial SOC from normal distribution
+    initial_soc = initialise_SOC(seed);
     L->soc_at_activity_start = initial_soc; // battery state of charge at the start of activity 𝑎
     L->current_soc = initial_soc;
     L->charge_duration = 0;
