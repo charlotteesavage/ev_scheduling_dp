@@ -75,11 +75,13 @@ int midpeak2_start_interval;
 int midpeak2_end_interval;
 
 /// utility_parameters
-double asc_parameters[5];
-double early_parameters[5];
-double late_parameters[5];
-double long_parameters[5];
-double short_parameters[5];
+// Note: Array size must accommodate the maximum group number used in activities
+// After preprocessing (group-1): groups 0-7, so we need size 8
+double asc_parameters[8];
+double early_parameters[8];
+double late_parameters[8];
+double long_parameters[8];
+double short_parameters[8];
 
 // // flex params, if needed
 // int flex, mid_flex, not_flex;
@@ -151,7 +153,8 @@ void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_
     //         speed, travel_time_penalty, curfew_time, max_outside_time, max_travel_time, peak_hour_time1,
     //         peak_hour_time2, horizon, time_interval);
 
-    for (int i = 0; i < 5; i++)
+    // Copy all 8 parameter values (groups 0-7 after preprocessing)
+    for (int i = 0; i < 8; i++)
     {
         asc_parameters[i] = asc[i];
         early_parameters[i] = early[i];

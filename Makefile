@@ -72,7 +72,23 @@ help:
 	@echo "  make rebuild  - Clean and rebuild everything"
 	@echo "  make run      - Build and run the program"
 	@echo "  make debug    - Build with debug symbols"
+	@echo "  make test     - Build and run test suite"
+	@echo "  make test-build - Build tests only (don't run)"
+	@echo "  make test-clean - Clean test artifacts"
 	@echo "  make help     - Show this help message"
 
+# Test targets (delegates to tests/Makefile)
+test:
+	@echo "Running tests..."
+	$(MAKE) -C tests test
+
+test-build:
+	@echo "Building tests..."
+	$(MAKE) -C tests
+
+test-clean:
+	@echo "Cleaning tests..."
+	$(MAKE) -C tests clean
+
 # Phony targets (not actual files)
-.PHONY: all clean rebuild run debug help
+.PHONY: all clean rebuild run debug help test test-build test-clean

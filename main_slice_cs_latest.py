@@ -36,14 +36,14 @@ TRAVEL_TIME_PENALTY = 0.1  # we will add dusk, home, dawn and work
 # NOT_FLEXIBLE = round(10 / TIME_INTERVAL)
 # activity_types = ["Home", "Education", "Errands", "Escort", "Leisure", "Shopping","Work", "ServiceStation"]
 group_to_type = {
-    0: "Home",
-    1: "Education",
-    2: "Errands",
-    3: "Escort",
-    4: "Leisure",
-    5: "Shopping",
-    6: "Work",
-    7: "ServiceStation",
+    1: "home",
+    2: "work",
+    3: "business",
+    4: "shop/visit",
+    5: "education",
+    6: "depot/medical",
+    7: "delivery/visit",
+    8: "other/escort"
 }
 
 
@@ -121,8 +121,9 @@ L_list._fields_ = [
 ]
 
 
-def initialize_and_personalize_activities(df, max_num_activities, individual):
+def initialize_and_personalize_activities(df, individual):
     """Create and personalize an array of activities based on the given dataframe and individual data."""
+    max_num_activities = len(df)
     activities_array = (Activity * max_num_activities)()
 
     # Dawn activity
@@ -232,32 +233,20 @@ def initialize_utility():
     )
     return params
 
-# group_to_type = {
-#     0: "Home",
-#     1: "Education",
-#     2: "Errands",
-#     3: "Escort",
-#     4: "Leisure",
-#     5: "Shopping",
-#     6: "Work",
-#     7: "ServiceStation",
-# }
 
 def compile_code():
     """Compile the scheduling C code as a shared library for Python ctypes."""
-    # Get the current directory
     current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir  = os.path.dirname(current_dir)
 
-    # Define paths
-    src_dir = os.path.join(current_dir, "src")
-    inc_dir = os.path.join(current_dir, "include")
+    src_dir = os.path.join(parent_dir, "src")
+    inc_dir = os.path.join(parent_dir, "include")
     output_lib = os.path.join(current_dir, "scheduling.so")
 
-    # Source files to compile
     sources = [
         os.path.join(src_dir, "scheduling.c"),
         os.path.join(src_dir, "utils.c"),
-        os.path.join(src_dir, "main.c"),
+        os.path.join(src_dir, "main.c")
     ]
 
     compile_command = [
@@ -268,20 +257,20 @@ def compile_code():
         "-fPIC",
         f"-I{inc_dir}",
         "-o",
-        output_lib,
+        output_lib ,
     ] + sources + ["-lm"]
 
-    print(f"Compiling C code: {' '.join(compile_command)}")
+    print("Compiling c lib")
     result = subprocess.run(compile_command, capture_output=True, text=True)
 
-    if result.returncode != 0:
-        print("Compilation failed!")
-        print(f"STDERR: {result.stderr}")
-        raise RuntimeError("Failed to compile C code")
+    if result.returncode!=0:
+        print("code failed to compile")
+        raise RuntimeError("Failed to compile C code into lib")
     else:
-        print("Compilation successful! Created scheduling_CS.so")
-
+        print("Compilation successful")
+    
     return output_lib
+
 
 
 def extract_schedule_data(label_pointer, activity_df, individual, num_activities):

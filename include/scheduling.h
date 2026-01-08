@@ -137,11 +137,13 @@ extern int midpeak2_start;
 extern int midpeak2_end;
 
 // Utility parameters
-extern double asc_parameters[5];
-extern double early_parameters[5];
-extern double late_parameters[5];
-extern double long_parameters[5];
-extern double short_parameters[5];
+// Note: Array size must accommodate the maximum group number used in activities
+// After preprocessing (group-1): groups 0-7, so we need size 8
+extern double asc_parameters[8];
+extern double early_parameters[8];
+extern double late_parameters[8];
+extern double long_parameters[8];
+extern double short_parameters[8];
 // extern int flex, mid_flex, not_flex;
 
 // Charging utility parameters
