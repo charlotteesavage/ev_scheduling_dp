@@ -164,46 +164,56 @@ def compile_code():
 def initialize_utility():
     """Initialize utility parameters correctly mapped to actual data groups.
 
-    Original parameter mapping from reference implementation:
-    [0:Home, 1:Education, 2:Errands, 3:Escort, 4:Leisure, 5:Shopping, 6:Work, 7:ServiceStation]
+        Original parameter mapping from reference implementation:
+        [0:Home, 1:Education, 2:Errands, 3:Escort, 4:Leisure, 5:Shopping, 6:Work, 7:ServiceStation]
 
-    Actual data group mapping (from activities_list_per_pid.csv):
-    Group 1: Home
-    Group 2: Work
-    Group 3: Business
-    Group 4: Shop/Visit (Leisure)
-    Group 5: Education
-    Group 6: Depot/Medical (Service)
-    Group 7: Delivery/Visit
-    Group 8: Escort/Other/PT Interaction
+        Actual data group mapping (from activities_list_per_pid.csv):
+        Group 1: Home
+        Group 2: Work
+        Group 3: Business
+        Group 4: Shop/Visit (Leisure)
+        Group 5: Education
+        Group 6: Depot/Medical (Service)
+        Group 7: Delivery/Visit
+        Group 8: Escort/Other/PT Interaction
 
-    act_type_to_group = {
-    'home': 1,
-    'work': 2,
-    'business': 3,
-    'shop': 4,
-    'visit': 4,              # 4 is most common (21,791 vs 10)
-    'education': 5,
-    'medical': 8,            # 8 is most common (5,573 vs 25)
-    'depot': 6,
-    'delivery': 7,
-    'other': 8,
-    'pt interaction': 8,
-    'escort_business': 8,
-    'escort_education': 8,
-    'escort_home': 8,
-    'escort_other': 8,
-    'escort_shop': 8,
-    'escort_work': 8
-}
+        act_type_to_group = {
+        'home': 1,
+        'work': 2,
+        'business': 3,
+        'shop': 4,
+        'visit': 4,              # 4 is most common (21,791 vs 10)
+        'education': 5,
+        'depot': 6, ??? what is this?
+        'delivery': 7,          #/errands
+        'other': 8,
+        'medical': 8,            # 8 is most common (5,573 vs 25)
+        'pt interaction': 8,
+        'escort_business': 8,
+        'escort_education': 8,
+        'escort_home': 8,
+        'escort_other': 8,
+        'escort_shop': 8,
+        'escort_work': 8,
+        'service_station': 9
+    }
     """
-    # Original parameters
-    asc   = [0, 17.4, 16.1, 6.76, 12, 11.3, 10.6, 0]
-    early = [0, -2.56, -1.73, -2.55, -0.031, -2.51, -1.37, 0]
-    late  = [0, -1.54, -3.42, -0.578, -1.58, -0.993, -0.79, 0]
-    long  = [0, -0.0783, -0.597, -0.0267, -0.209, -0.133, -0.201, 0]
-    short = [0, -0.783, -5.63, 0.134, -0.00764, 0.528, -4.78, 0]
 
+    # we don't have a delivery parameter coeff in the paper, and the given data doesn't have a leisure activity, so can change these as desired
+
+    # asc=[0, 10.6, 0, 11.3, 17.4, 12, 16.1, 6.76, 0],
+    # early=[0, -1.37, 0, -2.51, -2.56, -0.031, -1.73, -2.55, 0],
+    # late=[0, -0.79, 0, -0.993, -1.54, -1.58, -3.42, -0.578, 0],
+    # long=[0, -0.201, 0, -0.133, -0.0783, -0.209, -0.597, -0.0267, 0],
+    # short=[0, -4.78, 0, 0.528, -0.783, -0.00764, -5.63, 0.134, 0],
+
+    # have made "business" coeffs the same as "errands" coeffs
+    # have used Leisure params from the paper in 6: depot, cos not sure what else to do there
+    asc = [0, 10.6, 16.1, 11.3, 17.4, 12, 16.1, 6.76, 0]
+    early = [0, -1.37, -1.73, -2.51, -2.56, -0.031, -1.73, -2.55, 0]
+    late = [0, -0.79, -3.42, -0.993, -1.54, -1.58, -3.42, -0.578, 0]
+    long = [0, -0.201, -0.597, -0.133, -0.0783, -0.209, -0.597, -0.0267, 0]
+    short = [0, -4.78, -5.63, 0.528, -0.783, -0.00764, -5.63, 0.134, 0]
 
     return {
         'asc': asc,
@@ -436,7 +446,11 @@ def main():
     lib.get_final_schedule.restype = POINTER(Label)
     lib.free_bucket.restype = None
 
-    csv_to_load = "test_activities_person_654_work_less_duration.csv"
+    # csv_to_load = "test_activities_person_654_work_less_duration.csv"
+    # csv_to_load = "test_activities_person_654_fixed.csv"
+    csv_to_load = "test_activities_person_654_with_service_station.csv"
+    # csv_to_load = "test_service_station_forced.csv"
+    # csv_to_load = "test_service_station_simple.csv"
     # Paths (data is in parent directory)
     script_dir = Path(__file__).parent
     parent_dir = script_dir.parent
@@ -451,7 +465,6 @@ def main():
     # Check files exist
     if not activities_file.exists():
         print(f"ERROR: {activities_file} not found!")
-        print("Please run: python3 prepare_single_person_data.py")
         return
 
     # Load data
