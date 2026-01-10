@@ -36,7 +36,7 @@ double energy_consumption_rate = 0.2; // kwh_per_km
 // Initial SOC parameters for normal distribution
 unsigned int seed = 42; // Fixed seed for reproducibility (use time(NULL) for random each run)
 double initial_soc_mean = 0.60;    // 60% average starting SOC
-double initial_soc_std_dev = 0.10; // 10% standard deviation 
+double initial_soc_std_dev = 0.10; // 10% standard deviation
 double initial_soc; // Will be set using normal_random() in create_label()
 
 double slow_charge_power = 7.0;
@@ -534,17 +534,6 @@ static double update_utility(Label *L)
 // function on the basis of minutes
 // time horizons differences are multiplied to be expressed in minutes from the parameters
 
-//     group_to_type = {
-//     0: "Home",
-//     1: "Education",
-//     2: "Errands",
-//     3: "Escort",
-//     4: "Leisure",
-//     5: "Shopping",
-//     6: "Work",
-//     7: "ServiceStation",
-// }
-
 // check if charging constrants can be used to deal with service stations instead
 // time window constraints between 7am and 11pm, not allowed outside that
 {
@@ -755,6 +744,16 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
 
             // All utility changes happen only for new activities
         }
+    }
+
+    // CONTINUOUS SOC PENALTY: Apply penalty for low battery at EVERY time interval
+    // This makes operating with low SOC costly throughout the journey
+    if (new_label->current_soc < soc_threshold)
+    {
+        // Apply penalty proportional to how far below threshold we are
+        // theta_soc is negative (e.g., -80), so this reduces utility when SOC is low
+        double soc_deficit = soc_threshold - new_label->current_soc;
+        new_label->utility += theta_soc * soc_deficit * (time_interval / 60.0); // Scale by interval duration
     }
 
     return new_label;
