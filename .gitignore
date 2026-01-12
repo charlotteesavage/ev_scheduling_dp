@@ -40,12 +40,10 @@ obj/
 
 # Output and data files
 output/
-*.csv
 *.json
 
 # Jupyter Notebooks (if you add any)
 .ipynb_checkpoints/
-*.ipynb
 
 # Testing
 .pytest_cache/
