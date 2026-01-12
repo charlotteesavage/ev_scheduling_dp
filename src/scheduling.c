@@ -75,13 +75,11 @@ int midpeak2_start_interval;
 int midpeak2_end_interval;
 
 /// utility_parameters
-// Note: Array size must accommodate the maximum group number used in activities
-// After preprocessing (group-1): groups 0-7, so we need size 8
-double asc_parameters[8];
-double early_parameters[8];
-double late_parameters[8];
-double long_parameters[8];
-double short_parameters[8];
+double asc_parameters[9];
+double early_parameters[9];
+double late_parameters[9];
+double long_parameters[9];
+double short_parameters[9];
 
 // // flex params, if needed
 // int flex, mid_flex, not_flex;
@@ -153,8 +151,7 @@ void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_
     //         speed, travel_time_penalty, curfew_time, max_outside_time, max_travel_time, peak_hour_time1,
     //         peak_hour_time2, horizon, time_interval);
 
-    // Copy all 8 parameter values (groups 0-7 after preprocessing)
-    for (int i = 0; i < 8; i++)
+    for (int i = 0; i < 9; i++)
     {
         asc_parameters[i] = asc[i];
         early_parameters[i] = early[i];
@@ -534,6 +531,17 @@ static double update_utility(Label *L)
 // function on the basis of minutes
 // time horizons differences are multiplied to be expressed in minutes from the parameters
 
+//     group_to_type = {
+//     0: "Home",
+//     1: "Education",
+//     2: "Errands",
+//     3: "Escort",
+//     4: "Leisure",
+//     5: "Shopping",
+//     6: "Work",
+//     7: "ServiceStation",
+// }
+
 // check if charging constrants can be used to deal with service stations instead
 // time window constraints between 7am and 11pm, not allowed outside that
 {
@@ -577,7 +585,7 @@ static double update_utility(Label *L)
     // calculate the utility change from charging at finished activity
     if (previous_act->is_charging)
     {
-        if (previous_activity_type == 6)
+        if (previous_activity_type == 1)
         {
             L->utility += gamma_charge_work;
         }
@@ -594,6 +602,7 @@ static double update_utility(Label *L)
         double total_delta_soc = previous_L->current_soc - previous_L->soc_at_activity_start;
         L->utility += beta_delta_soc * total_delta_soc;
         if (previous_L->previous != NULL) // if the previous act is not empty (ie it is after dawn), need to calc the charge cost
+        // if (previous_L->charge_cost_at_activity_start > 0)
         {
             double activity_charge_cost = previous_L->current_charge_cost - previous_L->charge_cost_at_activity_start;
             L->utility += beta_charge_cost * activity_charge_cost;
@@ -746,15 +755,15 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
         }
     }
 
-    // CONTINUOUS SOC PENALTY: Apply penalty for low battery at EVERY time interval
-    // This makes operating with low SOC costly throughout the journey
-    if (new_label->current_soc < soc_threshold)
-    {
-        // Apply penalty proportional to how far below threshold we are
-        // theta_soc is negative (e.g., -80), so this reduces utility when SOC is low
-        double soc_deficit = soc_threshold - new_label->current_soc;
-        new_label->utility += theta_soc * soc_deficit * (time_interval / 60.0); // Scale by interval duration
-    }
+    // // CONTINUOUS SOC PENALTY: Apply penalty for low battery at EVERY time interval
+    // // This makes operating with low SOC costly throughout the journey
+    // if (new_label->current_soc < soc_threshold)
+    // {
+    //     // Apply penalty proportional to how far below threshold we are
+    //     // theta_soc is negative (e.g., -80), so this reduces utility when SOC is low
+    //     double soc_deficit = soc_threshold - new_label->current_soc;
+    //     new_label->utility += theta_soc * soc_deficit * (time_interval / 60.0); // Scale by interval duration
+    // }
 
     return new_label;
 }

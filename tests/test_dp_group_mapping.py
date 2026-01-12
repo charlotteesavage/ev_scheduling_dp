@@ -1,12 +1,6 @@
-"""
-Test script for running DP with single-person Sheffield data.
-
-This adapts main_slice_cs.py to work with the Sheffield case study data format.
-"""
-
 import pandas as pd
 import numpy as np
-from ctypes import *
+from ctypes import Structure, c_int, c_double, POINTER, CDLL, c_char
 import subprocess
 import os
 import time
@@ -15,6 +9,12 @@ from pathlib import Path
 # Constants
 TIME_INTERVAL = 5  # minutes
 HORIZON = 288  # number of 5-minute intervals in 24 hours
+AVG_SPEED_PER_HOUR = (
+    20.4 * 1.60934
+)  # km/h taken from https://www.gov.uk/government/statistical-data-sets/average-speed-delay-and-reliability-of-travel-times-cgn#average-speed-delay-and-reliability-of-travel-times-on-local-a-roads-cgn05
+# can also check https://www.gov.uk/government/publications/webtag-tag-unit-m1-2-data-sources-and-surveys
+SPEED = AVG_SPEED_PER_HOUR * 16.667  # 1km/h = 16.667 m/min, converts it to minutes
+TRAVEL_TIME_PENALTY = 0.1  # we will add dusk, home, dawn and work
 
 
 # ===== C Structure Definitions =====
@@ -273,7 +273,7 @@ def initialize_and_personalize_activities(df):
         activities_array[act_id].x = int(row['x'])
         activities_array[act_id].y = int(row['y'])
 
-        # CRITICAL: Subtract 1 from all group numbers to align with algorithm's group=0 for home
+        # Subtract 1 from all group numbers to align with algorithm's group=0 for home
         # Production data has: Group 1=Home, 2=Work, 3=Business, etc.
         # Algorithm expects: Group 0=Home, 1=Work, 2=Business, etc.
         # This makes home=0, which allows multiple visits per day (see mem_contains in utils.c)
@@ -317,20 +317,17 @@ def run_dp(lib, activities_array, max_num_activities, params):
     long_array = (c_double * len(params['long']))(*params['long'])
     short_array = (c_double * len(params['short']))(*params['short'])
 
-    # Set general parameters
-    speed = 50000.0 / 60.0  # m/min (50 km/h)
-    travel_time_penalty = -0.5
 
     lib.set_general_parameters(
         HORIZON,
-        speed,
-        travel_time_penalty,
+        SPEED,
+        TRAVEL_TIME_PENALTY,
         TIME_INTERVAL,
         asc_array,
         early_array,
         late_array,
         long_array,
-        short_array
+        short_array,
     )
 
     # Set activities
@@ -446,11 +443,12 @@ def main():
     lib.get_final_schedule.restype = POINTER(Label)
     lib.free_bucket.restype = None
 
-    # csv_to_load = "test_activities_person_654_work_less_duration.csv"
+    csv_to_load = "test_activities_person_654_work_less_duration.csv"
     # csv_to_load = "test_activities_person_654_fixed.csv"
-    csv_to_load = "test_activities_person_654_with_service_station.csv"
+    # csv_to_load = "test_activities_person_654_with_service_station.csv"
     # csv_to_load = "test_service_station_forced.csv"
     # csv_to_load = "test_service_station_simple.csv"
+    # csv_to_load = "test_constraint_27_demo.csv"
     # Paths (data is in parent directory)
     script_dir = Path(__file__).parent
     parent_dir = script_dir.parent
@@ -492,7 +490,7 @@ def main():
         print(schedule_df.to_string(index=False))
 
         # Save to CSV
-        output_file = data_dir / f"{csv_to_load[:-4]}_optimal_schedule.csv"
+        output_file = data_dir / f"schedules/{csv_to_load[:-4]}_optimal_schedule.csv"
         schedule_df.to_csv(output_file, index=False)
         print(f"\nSchedule saved to: {output_file}")
 
