@@ -37,9 +37,6 @@ ENV/
 bin/
 obj/
 
-# Old executables in root
-scheduling
-scheduling_CS
 
 # Output and data files
 output/
@@ -65,7 +62,7 @@ Thumbs.db
 
 
 offcuts/
-testing/
 data/
 dylan_data/
-/not_in_play
+not_in_play/
+tests/

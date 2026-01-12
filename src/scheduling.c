@@ -573,7 +573,7 @@ static double update_utility(Label *L)
                       fmax(0, previous_L->duration - previous_act->des_duration);
     }
 
-    // PENALTY FOR STARTING NEW ACTIVITY (timing deviation)
+    // Early/late start penalty (timing deviation)
     if (activity_type != 0 && !act->is_service_station)
     {
         L->utility += early_parameters[activity_type] * time_interval *
@@ -746,7 +746,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
             new_label->current_soc += new_label->delta_soc;
 
             // Calculate charging cost for this interval
-            double tou_factor = get_tou_factor(new_label->time);
+            double tou_factor = get_tou_factor(new_label->start_time); // needs to be at the start of the interval
             double energy_charged_kwh = new_label->delta_soc * battery_capacity;
             double interval_cost = charge_price * tou_factor * energy_charged_kwh;
             new_label->current_charge_cost += interval_cost;

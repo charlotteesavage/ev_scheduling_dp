@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 from ctypes import Structure, c_int, c_double, POINTER, CDLL, c_char
 import subprocess
 import os
@@ -14,10 +13,41 @@ AVG_SPEED_PER_HOUR = (
 )  # km/h taken from https://www.gov.uk/government/statistical-data-sets/average-speed-delay-and-reliability-of-travel-times-cgn#average-speed-delay-and-reliability-of-travel-times-on-local-a-roads-cgn05
 # can also check https://www.gov.uk/government/publications/webtag-tag-unit-m1-2-data-sources-and-surveys
 SPEED = AVG_SPEED_PER_HOUR * 16.667  # 1km/h = 16.667 m/min, converts it to minutes
-TRAVEL_TIME_PENALTY = 0.1  # we will add dusk, home, dawn and work
+TRAVEL_TIME_PENALTY = -0.1  # we will add dusk, home, dawn and work
 
+act_type_to_group = {
+    "home": 1,
+    "work": 2,
+    "business": 3,
+    "shop": 4,
+    "visit": 4,  # 4 is most common (21,791 vs 10)
+    "education": 5,
+    "depot": 6,
+    "delivery": 7,  # /errands
+    "other": 8,
+    "medical": 8,  # 8 is most common (5,573 vs 25)
+    "pt interaction": 8,
+    "escort_business": 8,
+    "escort_education": 8,
+    "escort_home": 8,
+    "escort_other": 8,
+    "escort_shop": 8,
+    "escort_work": 8,
+    "service_station": 9,
+}
 
-# ===== C Structure Definitions =====
+group_to_type = {
+    1: "home",
+    2: "Work",
+    3: "business",
+    4: "shop",
+    5: "education",
+    6: "depot",
+    7: "delivery/errands",
+    8: "escort/other",
+    9: "service_station",
+}
+
 
 class Group_mem(Structure):
     pass
@@ -86,8 +116,8 @@ L_list._fields_ = [
     ("next", POINTER(L_list)),
 ]
 
-
 # ===== C Compilation =====
+
 
 def compile_code():
     """Compile the scheduling C code as a shared library for Python ctypes."""
@@ -118,33 +148,41 @@ def compile_code():
         for src_file in sources:
             if os.path.getmtime(src_file) > lib_mtime:
                 needs_recompile = True
-                print(f"Source file {os.path.basename(src_file)} is newer than compiled library")
+                print(
+                    f"Source file {os.path.basename(src_file)} is newer than compiled library"
+                )
                 break
 
         # Also check header files
         if not needs_recompile:
             for header_file in os.listdir(inc_dir):
-                if header_file.endswith('.h'):
+                if header_file.endswith(".h"):
                     header_path = os.path.join(inc_dir, header_file)
                     if os.path.getmtime(header_path) > lib_mtime:
                         needs_recompile = True
-                        print(f"Header file {header_file} is newer than compiled library")
+                        print(
+                            f"Header file {header_file} is newer than compiled library"
+                        )
                         break
 
         if not needs_recompile:
             print(f"Using existing compiled library: {output_lib}")
             return output_lib
 
-    compile_command = [
-        "gcc",
-        "-m64",
-        "-O3",
-        "-shared",
-        "-fPIC",
-        f"-I{inc_dir}",
-        "-o",
-        output_lib,
-    ] + sources + ["-lm"]
+    compile_command = (
+        [
+            "gcc",
+            "-m64",
+            "-O3",
+            "-shared",
+            "-fPIC",
+            f"-I{inc_dir}",
+            "-o",
+            output_lib,
+        ]
+        + sources
+        + ["-lm"]
+    )
 
     print(f"Compiling C code: {' '.join(compile_command)}")
     result = subprocess.run(compile_command, capture_output=True, text=True)
@@ -159,13 +197,69 @@ def compile_code():
     return output_lib
 
 
-# ===== Utility Parameters =====
+# ===== Data prep functions =====
+
+
+def initialise_and_personalise_activities(df):
+    """
+    Create and personalize an array of activities from Sheffield data.
+
+    Note: CSV should include dawn (id=0) and dusk (id=max) activities.
+    """
+    max_num_activities = len(df)
+    activities_array = (Activity * max_num_activities)()
+
+    print(f"\nInitializing {max_num_activities} activities...")
+
+    for _, row in df.iterrows():
+        act_id = int(row["id"])
+
+        activities_array[act_id].id = act_id
+        activities_array[act_id].x = int(row["x"])
+        activities_array[act_id].y = int(row["y"])
+
+        # Subtract 1 from all group numbers to align with algorithm's group=0 for home
+        # This makes home=0, which allows multiple visits per day (see mem_contains in utils.c)
+        activities_array[act_id].group = int(row["group"]) - 1
+
+        activities_array[act_id].earliest_start = int(row["earliest_start"])
+        activities_array[act_id].latest_start = int(row["latest_start"])
+        activities_array[act_id].min_duration = int(row["min_duration"])
+        activities_array[act_id].max_duration = int(row["max_duration"])
+        activities_array[act_id].des_start_time = (
+            int(row["des_start_time"]) if not pd.isna(row["des_start_time"]) else 0
+        )
+        activities_array[act_id].des_duration = (
+            int(row["des_duration"]) if not pd.isna(row["des_duration"]) else 0
+        )
+
+        # Charging fields (handle NaN values)
+        activities_array[act_id].charge_mode = (
+            int(row["charge_mode"]) if not pd.isna(row["charge_mode"]) else 0
+        )
+        activities_array[act_id].is_charging = (
+            int(row["is_charging"]) if not pd.isna(row["is_charging"]) else 0
+        )
+        activities_array[act_id].is_service_station = (
+            int(row["is_service_station"])
+            if not pd.isna(row["is_service_station"])
+            else 0
+        )
+
+        # Memory (will be initialized by C code)
+        activities_array[act_id].memory = None
+
+    print(f"Initialized {len(df)} activities (array size: {max_num_activities})")
+    print(f"  - Dawn: id=0, Dusk: id={max_num_activities - 1}")
+    print(
+        f"  - Activities with charging: {sum(activities_array[i].is_charging for i in range(max_num_activities))}"
+    )
+
+    return activities_array, max_num_activities
+
 
 def initialize_utility():
     """Initialize utility parameters correctly mapped to actual data groups.
-
-        Original parameter mapping from reference implementation:
-        [0:Home, 1:Education, 2:Errands, 3:Escort, 4:Leisure, 5:Shopping, 6:Work, 7:ServiceStation]
 
         Actual data group mapping (from activities_list_per_pid.csv):
         Group 1: Home
@@ -184,7 +278,7 @@ def initialize_utility():
         'shop': 4,
         'visit': 4,              # 4 is most common (21,791 vs 10)
         'education': 5,
-        'depot': 6, ??? what is this?
+        'depot': 6,             #??? what is this?
         'delivery': 7,          #/errands
         'other': 8,
         'medical': 8,            # 8 is most common (5,573 vs 25)
@@ -209,114 +303,31 @@ def initialize_utility():
 
     # have made "business" coeffs the same as "errands" coeffs
     # have used Leisure params from the paper in 6: depot, cos not sure what else to do there
+
     asc = [0, 10.6, 16.1, 11.3, 17.4, 12, 16.1, 6.76, 0]
     early = [0, -1.37, -1.73, -2.51, -2.56, -0.031, -1.73, -2.55, 0]
     late = [0, -0.79, -3.42, -0.993, -1.54, -1.58, -3.42, -0.578, 0]
     long = [0, -0.201, -0.597, -0.133, -0.0783, -0.209, -0.597, -0.0267, 0]
     short = [0, -4.78, -5.63, 0.528, -0.783, -0.00764, -5.63, 0.134, 0]
 
-    return {
-        'asc': asc,
-        'early': early,
-        'late': late,
-        'long': long,
-        'short': short
-    }
-
-
-# ===== Data Loading Functions =====
-
-def load_test_activities(filepath):
-    """Load test activities CSV with charging information."""
-    df = pd.read_csv(filepath)
-    # Strip whitespace from column names
-    df.columns = df.columns.str.strip()
-
-    # Replace empty strings and whitespace-only strings with NaN
-    df = df.replace(r'^\s*$', np.nan, regex=True)
-
-    print(f"Loaded {len(df)} activities from {filepath}")
-    print(f"Activities with charging: {df['is_charging'].sum()}")
-    print(f"Charge modes: {df['charge_mode'].value_counts().to_dict()}")
-    return df
-
-
-# def load_test_individual(filepath):
-#     """Load test individual CSV."""
-#     df = pd.read_csv(filepath)
-#     individual = df.iloc[0].to_dict()
-#     print(f"\nLoaded individual: {individual['pid']}")
-#     return individual
-
-
-# ===== Activity Initialization =====
-
-def initialize_and_personalize_activities(df):
-    """
-    Create and personalize an array of activities from Sheffield data.
-
-    Note: CSV should include dawn (id=0) and dusk (id=max) activities.
-    """
-    max_num_activities = len(df)
-    activities_array = (Activity * max_num_activities)()
-
-    print(f"\nInitializing {max_num_activities} activities...")
-
-    for idx, row in df.iterrows():
-        # Handle both 'activity_idx' and 'id' column names
-        if 'activity_idx' in df.columns:
-            act_id = int(row['activity_idx'])
-        else:
-            act_id = int(row['id'])
-
-        activities_array[act_id].id = act_id
-        activities_array[act_id].x = int(row['x'])
-        activities_array[act_id].y = int(row['y'])
-
-        # Subtract 1 from all group numbers to align with algorithm's group=0 for home
-        # Production data has: Group 1=Home, 2=Work, 3=Business, etc.
-        # Algorithm expects: Group 0=Home, 1=Work, 2=Business, etc.
-        # This makes home=0, which allows multiple visits per day (see mem_contains in utils.c)
-        # NOTE: Test data should also follow production format (home=1) for consistency
-        activities_array[act_id].group = int(row['group']) - 1
-
-        activities_array[act_id].earliest_start = int(row['earliest_start'])
-        activities_array[act_id].latest_start = int(row['latest_start'])
-        activities_array[act_id].min_duration = int(row['min_duration'])
-        activities_array[act_id].max_duration = int(row['max_duration'])
-        activities_array[act_id].des_start_time = int(row['des_start_time']) if not pd.isna(row['des_start_time']) else 0
-        activities_array[act_id].des_duration = int(row['des_duration']) if not pd.isna(row['des_duration']) else 0
-
-        # Charging fields (handle NaN values)
-        activities_array[act_id].charge_mode = int(row['charge_mode']) if not pd.isna(row['charge_mode']) else 0
-        activities_array[act_id].is_charging = int(row['is_charging']) if not pd.isna(row['is_charging']) else 0
-        activities_array[act_id].is_service_station = int(row['is_service_station']) if not pd.isna(row['is_service_station']) else 0
-
-        # Memory (will be initialized by C code)
-        activities_array[act_id].memory = None
-
-    print(f"Initialized {len(df)} activities (array size: {max_num_activities})")
-    print(f"  - Dawn: id=0, Dusk: id={max_num_activities-1}")
-    print(f"  - Activities with charging: {sum(activities_array[i].is_charging for i in range(max_num_activities))}")
-
-    return activities_array, max_num_activities
+    return {"asc": asc, "early": early, "late": late, "long": long, "short": short}
 
 
 # ===== Main Execution =====
 
+
 def run_dp(lib, activities_array, max_num_activities, params):
     """Run the DP algorithm."""
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Running DP Algorithm...")
-    print("="*60)
+    print("=" * 60)
 
     # Convert parameters to C arrays
-    asc_array = (c_double * len(params['asc']))(*params['asc'])
-    early_array = (c_double * len(params['early']))(*params['early'])
-    late_array = (c_double * len(params['late']))(*params['late'])
-    long_array = (c_double * len(params['long']))(*params['long'])
-    short_array = (c_double * len(params['short']))(*params['short'])
-
+    asc_array = (c_double * len(params["asc"]))(*params["asc"])
+    early_array = (c_double * len(params["early"]))(*params["early"])
+    late_array = (c_double * len(params["late"]))(*params["late"])
+    long_array = (c_double * len(params["long"]))(*params["long"])
+    short_array = (c_double * len(params["short"]))(*params["short"])
 
     lib.set_general_parameters(
         HORIZON,
@@ -380,34 +391,37 @@ def extract_schedule(best_label, activities_array, activities_df=None):
         activity = activities_array[label.act_id]
 
         # Get activity type name from original dataframe if available
-        if activities_df is not None and 'act_type' in activities_df.columns:
-            act_type_row = activities_df[activities_df['id'] == label.act_id]
+        if activities_df is not None and "act_type" in activities_df.columns:
+            act_type_row = activities_df[activities_df["id"] == label.act_id]
             if not act_type_row.empty:
-                act_type = act_type_row.iloc[0]['act_type']
+                act_type = act_type_row.iloc[0]["act_type"]
             else:
-                act_type = 'home' if activity.group == 0 else f'group_{activity.group}'
+                act_type = "home" if activity.group == 0 else f"group_{activity.group}"
         else:
-            act_type = 'home' if activity.group == 0 else f'group_{activity.group}'
+            act_type = "home" if activity.group == 0 else f"group_{activity.group}"
 
         unique_key = (label.act_id, label.start_time)
         data = {
-            'act_id': label.act_id,
-            'act_type': act_type,
-            'start_time': label.start_time * TIME_INTERVAL / 60,  # Convert to hours
-            'duration': label.duration * TIME_INTERVAL / 60,  # Convert to hours
-            'soc_start': label.soc_at_activity_start,
-            'soc_end': label.current_soc,
-            'is_charging': activity.is_charging,
-            'charge_mode': activity.charge_mode,
-            'charge_duration': label.charge_duration * TIME_INTERVAL / 60,  # hours
-            'charge_cost': label.current_charge_cost,
-            'utility': label.utility,
-            'x': activity.x,
-            'y': activity.y
+            "act_id": label.act_id,
+            "act_type": act_type,
+            "start_time": label.start_time * TIME_INTERVAL / 60,  # Convert to hours
+            "duration": label.duration * TIME_INTERVAL / 60,  # Convert to hours
+            "soc_start": label.soc_at_activity_start,
+            "soc_end": label.current_soc,
+            "is_charging": activity.is_charging,
+            "charge_mode": activity.charge_mode,
+            "charge_duration": label.charge_duration * TIME_INTERVAL / 60,  # hours
+            "charge_cost": label.current_charge_cost,
+            "utility": label.utility,
+            "x": activity.x,
+            "y": activity.y,
         }
 
         # Keep label with maximum duration for each (act_id, start_time) pair
-        if unique_key not in schedule_dict or schedule_dict[unique_key]['duration'] < data['duration']:
+        if (
+            unique_key not in schedule_dict
+            or schedule_dict[unique_key]["duration"] < data["duration"]
+        ):
             schedule_dict[unique_key] = data
 
     schedule = list(schedule_dict.values())
@@ -416,9 +430,9 @@ def extract_schedule(best_label, activities_array, activities_df=None):
 
 def main():
     """Main execution function."""
-    print("="*60)
+    print("=" * 60)
     print("Sheffield EV Charging Scheduling Test")
-    print("="*60)
+    print("=" * 60)
 
     # Compile C code
     lib_path = compile_code()
@@ -443,34 +457,30 @@ def main():
     lib.get_final_schedule.restype = POINTER(Label)
     lib.free_bucket.restype = None
 
-    csv_to_load = "test_activities_person_654_work_less_duration.csv"
-    # csv_to_load = "test_activities_person_654_fixed.csv"
+    # csv_to_load = "test_activities_person_654_work_less_duration.csv"
+    csv_to_load = "test_activities_person_654.csv"
     # csv_to_load = "test_activities_person_654_with_service_station.csv"
-    # csv_to_load = "test_service_station_forced.csv"
-    # csv_to_load = "test_service_station_simple.csv"
-    # csv_to_load = "test_constraint_27_demo.csv"
+
     # Paths (data is in parent directory)
     script_dir = Path(__file__).parent
     parent_dir = script_dir.parent
-    data_dir = parent_dir / "tests/"
-    # Test with person_654 data
-    activities_file = data_dir / csv_to_load
-    # activities_file = data_dir / "person_259/person_259_acts_with_dawn_dusk.csv"
-    # activities_file = data_dir / "person_259/person_259_minimal_test.csv"
-    # activities_file = data_dir / "test_activities_single_person.csv"
-    # individual_file = data_dir / "test_individual.csv"
+    data_dir = parent_dir / "testing/"
+    activities_dir = data_dir / "activities"
 
-    # Check files exist
-    if not activities_file.exists():
-        print(f"ERROR: {activities_file} not found!")
-        return
+    # Test with person_654 data
+    activities_file = activities_dir / csv_to_load
 
     # Load data
-    activities_df = load_test_activities(activities_file)
+    activities_df = pd.read_csv(activities_file)
+
+    print(f"Loaded {len(activities_df)} activities")
+    print(f"Activities with charging: {activities_df['is_charging'].sum()}")
+    print(f"Charge modes: {activities_df['charge_mode'].value_counts().to_dict()}")
+
     # individual = load_test_individual(individual_file)
 
     # Initialize activities
-    activities_array, max_num_activities = initialize_and_personalize_activities(
+    activities_array, max_num_activities = initialise_and_personalise_activities(
         activities_df
     )
 
@@ -484,20 +494,22 @@ def main():
         # Extract and display schedule (pass activities_df for better display names)
         schedule_df = extract_schedule(best_label, activities_array, activities_df)
 
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("OPTIMAL SCHEDULE")
-        print("="*60)
+        print("=" * 60)
         print(schedule_df.to_string(index=False))
 
         # Save to CSV
-        output_file = data_dir / f"schedules/{csv_to_load[:-4]}_optimal_schedule.csv"
+        output_file = (
+            data_dir / f"optimal_schedules/{csv_to_load[:-4]}_optimal_schedule.csv"
+        )
         schedule_df.to_csv(output_file, index=False)
         print(f"\nSchedule saved to: {output_file}")
 
         # Summary statistics
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("SUMMARY")
-        print("="*60)
+        print("=" * 60)
         print(f"Total activities: {len(schedule_df)}")
         print(f"Charging sessions: {schedule_df['is_charging'].sum()}")
         print(f"Total charging time: {schedule_df['charge_duration'].sum():.2f} hours")
@@ -507,9 +519,9 @@ def main():
 
     # Cleanup
     lib.free_bucket()
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Test complete!")
-    print("="*60)
+    print("=" * 60)
 
 
 if __name__ == "__main__":
