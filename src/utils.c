@@ -134,62 +134,72 @@ Group_mem *copyLinkedList(Group_mem *head)
 /*  Creates a new linked list that contains nodes representing the union of head1 and head2
     plus an additional node with g as pipi.*/
 // updates the memory when you start a new activity
-Group_mem *unionLinkedLists(Group_mem *head1, Group_mem *head2, int pipi)
-{ // head2 is null, so we could simplify the function a lot
-    int pp = 0;
-    if (head1 == NULL || head2 == NULL)
+static int group_mem_contains_value(Group_mem *head, int value)
+{
+    Group_mem *curr = head;
+    while (curr != NULL)
     {
-        Group_mem *newNode = createNode(pipi);
-        return newNode;
+        if (curr->g == value)
+        {
+            return 1;
+        }
+        curr = curr->next;
     }
+    return 0;
+}
+
+static void group_mem_append_unique(Group_mem **head, Group_mem **tail, int value)
+{
+    if (group_mem_contains_value(*head, value))
+    {
+        return;
+    }
+    Group_mem *node = createNode(value);
+    if (*head == NULL)
+    {
+        *head = node;
+        *tail = node;
+        return;
+    }
+    (*tail)->next = node;
+    node->previous = *tail;
+    *tail = node;
+}
+
+Group_mem *unionLinkedLists(Group_mem *head1, Group_mem *head2, int pipi)
+{
+    // Preserve visited-groups memory across labels.
+    // This behaves like: union(head1, head2) U {pipi}
+    // Importantly: if head2 is NULL (common), we still keep head1.
+
     Group_mem *newHead = NULL;
     Group_mem *newTail = NULL;
-    Group_mem *curr1 = head1;
 
-    while (curr1 != NULL)
+    for (Group_mem *c = head1; c != NULL; c = c->next)
     {
-        Group_mem *curr2 = head2;
+        group_mem_append_unique(&newHead, &newTail, c->g);
+    }
+    for (Group_mem *c = head2; c != NULL; c = c->next)
+    {
+        group_mem_append_unique(&newHead, &newTail, c->g);
+    }
+    group_mem_append_unique(&newHead, &newTail, pipi);
 
-        while (curr2 != NULL)
-        {
-
-            if (curr1->g == curr2->g)
-            {
-                Group_mem *newNode = createNode(curr1->g);
-                if (newHead == NULL)
-                {
-                    newHead = newNode;
-                    newTail = newNode;
-                }
-                else
-                {
-                    newTail->next = newNode;
-                    newNode->previous = newTail;
-                    newTail = newTail->next;
-                }
-                break; // Move to the next element in the first list
-            }
-            curr2 = curr2->next;
-        }
-        curr1 = curr1->next;
-    }
-    if (newHead == NULL)
-    {
-        newHead = createNode(pipi);
-        newTail = newHead;
-    }
-    else
-    {
-        newTail->next = createNode(pipi);
-        newTail->next->previous = newTail;
-    }
     return newHead;
 };
 
 /* Removes the label from the provided list of label and adjusts the connections of adjacent labels. */
 L_list *remove_label(L_list *L)
 {
-    free(L->element);
+    if (L->element != NULL)
+    {
+        if (L->element->mem != NULL)
+        {
+            delete_group(L->element->mem);
+            L->element->mem = NULL;
+        }
+        free(L->element);
+    }
     L->element = NULL;
     L_list *L_re;
     if (L->previous != NULL && L->next != NULL)
@@ -223,6 +233,7 @@ L_list *remove_label(L_list *L)
     {
         return NULL;
     }
+    return NULL;
 };
 
 /* Adds memory (a Group_mem node) to an activity in the global activities array */

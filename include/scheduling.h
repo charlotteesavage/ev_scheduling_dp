@@ -28,8 +28,8 @@ typedef struct Activity
     int latest_start;   // expressed in # of time intervals
     int min_duration;   // expressed in # of time intervals
     int max_duration;   // expressed in # of time intervals
-    int x;
-    int y;
+    double x;
+    double y;
     int group; // this is the activity type
     Group_mem *memory;
     int des_duration;   // expressed in # of time intervals
@@ -163,6 +163,8 @@ void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_
 
 );
 void set_activities(Activity *activities_data, int pynum_activities);
+void set_fixed_initial_soc(double soc);
+void clear_fixed_initial_soc(void);
 
 // Algorithm functions
 void DP(void);

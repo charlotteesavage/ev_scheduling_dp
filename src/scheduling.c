@@ -34,10 +34,13 @@ double soc_threshold = 0.3;           // in %, minimum for comfort
 double energy_consumption_rate = 0.2; // kwh_per_km
 
 // Initial SOC parameters for normal distribution
-unsigned int seed = 42; // Fixed seed for reproducibility (use time(NULL) for random each run)
-double initial_soc_mean = 0.60;    // 60% average starting SOC
+unsigned int seed = 42; // Fixed seed =42 for reproducibility (use time(NULL) for random each run)
+double initial_soc_mean = 0.30;    // 30% average starting SOC
 double initial_soc_std_dev = 0.10; // 10% standard deviation
 double initial_soc; // Will be set using normal_random() in create_label()
+
+static int fixed_initial_soc_enabled = 0;
+static double fixed_initial_soc_value = 0.30;
 
 double slow_charge_power = 7.0;
 double fast_charge_power = 22.0;
@@ -56,8 +59,9 @@ double public_dc_charge_price = 0.79; // GBP/kWh
 double free_charging = 0;             // when charging is free
 // https://www.which.co.uk/reviews/new-and-used-cars/article/electric-car-charging-guide/how-much-does-it-cost-to-charge-an-electric-car-a8f4g1o7JzXj
 
-double tou_peak_factor = 1.5;
-double tou_midpeak_factor = 2.5;
+
+double tou_peak_factor = 2.5;
+double tou_midpeak_factor = 1.5;
 double tou_offpeak_factor = 1;
 
 int peak_start = 12;     // 12:00
@@ -132,6 +136,25 @@ double initialise_SOC(unsigned int seed_val)
     return output;
 }
 
+void set_fixed_initial_soc(double soc)
+{
+    if (soc < 0.0)
+    {
+        soc = 0.0;
+    }
+    if (soc > 1.0)
+    {
+        soc = 1.0;
+    }
+    fixed_initial_soc_enabled = 1;
+    fixed_initial_soc_value = soc;
+}
+
+void clear_fixed_initial_soc(void)
+{
+    fixed_initial_soc_enabled = 0;
+}
+
 void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_penalty, int pytime_interval,
                             double *asc, double *early, double *late, double *longp, double *shortp
                             // int pyflexible, int pymid_flex, int pynot_flex
@@ -188,8 +211,15 @@ static Label *create_label(Activity *aa)
     L->mem->next = NULL;
     L->mem->previous = NULL;
 
-    // Generate random initial SOC from normal distribution
-    initial_soc = initialise_SOC(seed);
+    // Initialize SOC
+    if (fixed_initial_soc_enabled)
+    {
+        initial_soc = fixed_initial_soc_value;
+    }
+    else
+    {
+        initial_soc = initialise_SOC(seed);
+    }
     L->soc_at_activity_start = initial_soc; // battery state of charge at the start of activity 𝑎
     L->current_soc = initial_soc;
     L->charge_duration = 0;
@@ -220,10 +250,13 @@ static double distance_x(Activity *a1, Activity *a2) // this will change as we w
 static int travel_time(Activity *a1, Activity *a2) // returns travel time in no of intervals
 {
     double dist = distance_x(a1, a2); // this will change too
-    int time = (int)(dist / speed);
-    time = (int)(ceil((double)time / time_interval) * time_interval); // Round down to the nearest 5-minute interval
-    int travel_time_horizon = time / time_interval;                   // Divide by 5 to fit within the 0-289 time horizon
-    return travel_time_horizon;
+    double minutes = dist / speed; // speed is metres per minute
+    int intervals = (int)ceil(minutes / (double)time_interval);
+    if (intervals < 0)
+    {
+        intervals = 0;
+    }
+    return intervals;
 };
 
 static double energy_consumed_soc(Activity *a1, Activity *a2) // energy consumed in SOC going from one activity to another
@@ -255,7 +288,7 @@ static void get_charge_rate_and_price(Activity *a, double result[2])
         charge_rate = slow_charge_rate;
         if (a->group == 0)
         {
-            charge_price = home_slow_charge_price;
+            charge_price = home_off_peak_price;
         }
         if (a->group != 0)
         {
@@ -352,11 +385,10 @@ static int is_feasible(Label *L, Activity *a)
             // double charge_price = results[1];
 
             // double delta_soc = charge_rate * time_interval / 60;
-
-            if (L->current_soc + charge_rate > soc_full)
-            {
-                return 0;
-            } // constraint 26
+            // Allow continuing the activity even if the battery is full (or would overfill).
+            // Charging itself is capped in update_label_from_activity() using fmin() and
+            // is disabled when current_soc >= soc_full, so feasibility should not block
+            // staying at the activity after reaching full SOC.
 
             // if (L->charge_duration <= 0)
             // {
@@ -496,11 +528,14 @@ static int dominates(Label *L1, Label *L2)
 
         /*  S'assure que tous les group de L2 sont dans L1, sinon ca veut dire que L2 peut etre moins bien pcq elle nn'a pas encore fait un group.
             Au contraire si L1 est meilleur alors que il n'a meme pas fait tous les groupes de L2, ca veut dire que son choice set est tjrs plus grand */
-        if (dom_mem_contains(L2, L1))
-        { // be sure of order
+        // Dominance should keep the label with the larger future choice set:
+        // if L1 has visited a subset of L2's groups, L1 can emulate any continuation of L2.
+        if (dom_mem_contains(L1, L2))
+        {
 
             // Exact method v2
-            if (L1->time <= L2->time)
+            if (L1->time <= L2->time &&
+                L1->current_soc >= L2->current_soc)
             {
                 return 2;
             }
@@ -572,6 +607,14 @@ static double update_utility(Label *L)
                       fmax(0, L->start_time - act->des_start_time);
     }
 
+    // SOC anxiety/disutility at activity start (paper Eq. 8 uses SOC_a).
+    // Apply at the start of each non-dummy activity so SOC influences subsequent choices.
+    // (Dawn/dusk are dummy home activities; keep their utility at 0.)
+    if (act->id != 0 && act->id != max_num_activities - 1)
+    {
+        L->utility += theta_soc * fmax(0, soc_threshold - L->soc_at_activity_start);
+    }
+
     // calculate the utility change from charging at finished activity
     if (previous_act->is_charging)
     {
@@ -588,7 +631,6 @@ static double update_utility(Label *L)
             L->utility += gamma_charge_non_work;
         }
 
-        L->utility += theta_soc * fmax(0, soc_threshold - previous_L->soc_at_activity_start);
         double total_delta_soc = previous_L->current_soc - previous_L->soc_at_activity_start;
         L->utility += beta_delta_soc * total_delta_soc;
         if (previous_L->previous != NULL) // if the previous act is not empty (ie it is after dawn), need to calc the charge cost
@@ -744,16 +786,6 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
             // All utility changes happen only for new activities
         }
     }
-
-    // // CONTINUOUS SOC PENALTY: Apply penalty for low battery at EVERY time interval
-    // // This makes operating with low SOC costly throughout the journey
-    // if (new_label->current_soc < soc_threshold)
-    // {
-    //     // Apply penalty proportional to how far below threshold we are
-    //     // theta_soc is negative (e.g., -80), so this reduces utility when SOC is low
-    //     double soc_deficit = soc_threshold - new_label->current_soc;
-    //     new_label->utility += theta_soc * soc_deficit * (time_interval / 60.0); // Scale by interval duration
-    // }
 
     return new_label;
 }
@@ -927,7 +959,7 @@ void DP()
                                 Ln->element = L1;
                                 list_2->next = Ln;
                                 Ln->next = NULL;
-                                Ln->previous = list_1;
+                                Ln->previous = list_2;
                             }
                         } // end if not dominance
                     } // end if feasible
