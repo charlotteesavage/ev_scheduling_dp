@@ -458,8 +458,8 @@ def main():
     lib.free_bucket.restype = None
 
     # csv_to_load = "test_activities_person_654_work_less_duration.csv"
-    csv_to_load = "test_activities_person_654.csv"
-    # csv_to_load = "test_activities_person_654_with_service_station.csv"
+    # csv_to_load = "test_activities_person_654.csv"
+    csv_to_load = "test_activities_person_654_with_service_station.csv"
 
     # Paths (data is in parent directory)
     script_dir = Path(__file__).parent

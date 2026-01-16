@@ -531,16 +531,6 @@ static double update_utility(Label *L)
 // function on the basis of minutes
 // time horizons differences are multiplied to be expressed in minutes from the parameters
 
-//     group_to_type = {
-//     0: "Home",
-//     1: "Education",
-//     2: "Errands",
-//     3: "Escort",
-//     4: "Leisure",
-//     5: "Shopping",
-//     6: "Work",
-//     7: "ServiceStation",
-// }
 
 // check if charging constrants can be used to deal with service stations instead
 // time window constraints between 7am and 11pm, not allowed outside that
