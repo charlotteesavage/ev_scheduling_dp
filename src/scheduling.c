@@ -34,8 +34,8 @@ double soc_threshold = 0.3;           // in %, minimum for comfort
 double energy_consumption_rate = 0.2; // kwh_per_km
 
 // Initial SOC parameters for normal distribution
-unsigned int seed = 42; // Fixed seed =42 for reproducibility (use time(NULL) for random each run)
-double initial_soc_mean = 0.30;    // 30% average starting SOC
+unsigned int seed = 42;            // Default seed for reproducibility (can be changed via set_random_seed())
+double initial_soc_mean = 0.40;    // 30% average starting SOC
 double initial_soc_std_dev = 0.10; // 10% standard deviation
 double initial_soc; // Will be set using normal_random() in create_label()
 
@@ -136,23 +136,9 @@ double initialise_SOC(unsigned int seed_val)
     return output;
 }
 
-void set_fixed_initial_soc(double soc)
+void set_random_seed(unsigned int seed_value)
 {
-    if (soc < 0.0)
-    {
-        soc = 0.0;
-    }
-    if (soc > 1.0)
-    {
-        soc = 1.0;
-    }
-    fixed_initial_soc_enabled = 1;
-    fixed_initial_soc_value = soc;
-}
-
-void clear_fixed_initial_soc(void)
-{
-    fixed_initial_soc_enabled = 0;
+    seed = seed_value;
 }
 
 void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_penalty, int pytime_interval,
@@ -304,6 +290,21 @@ static void get_charge_rate_and_price(Activity *a, double result[2])
     case 3: // rapid charging
         charge_rate = rapid_charge_rate;
         charge_price = public_dc_charge_price;
+        break;
+
+    case 4: // free slow charging
+        charge_rate = slow_charge_rate;
+        charge_price = 0.0;
+        break;
+
+    case 5: // free fast charging
+        charge_rate = fast_charge_rate;
+        charge_price = 0.0;
+        break;
+
+    case 6: // free rapid charging
+        charge_rate = rapid_charge_rate;
+        charge_price = 0.0;
         break;
     }
     result[0] = charge_rate;

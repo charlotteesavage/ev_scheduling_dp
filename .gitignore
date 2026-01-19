@@ -58,7 +58,8 @@ Thumbs.db
 *.tmp
 *.bak
 
-
+scripts/
+py
 offcuts/
 data/
 dylan_data/

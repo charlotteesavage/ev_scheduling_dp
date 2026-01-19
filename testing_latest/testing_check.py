@@ -220,8 +220,8 @@ def initialise_and_personalise_activities(df):
         activities_array[act_id].x = float(row["x"])
         activities_array[act_id].y = float(row["y"])
 
-        # Subtract 1 from all group numbers to align with algorithm's group=0 for home
-        # This makes home=0, which allows multiple visits per day (see mem_contains in utils.c)
+        # Align with algorithm's group=0 for home.
+        # home=0 allows multiple home visits per day (see mem_contains in utils.c).
         activities_array[act_id].group = int(row["group"]) - 1
 
         activities_array[act_id].earliest_start = int(row["earliest_start"])
@@ -272,6 +272,7 @@ def initialize_utility():
         Group 6: Depot/Medical (Service)
         Group 7: Delivery/Visit
         Group 8: Escort/Other/PT Interaction
+        Group 9: Service Station
 
         act_type_to_group = {
         'home': 1,
@@ -408,7 +409,8 @@ def extract_schedule(best_label, activities_array, activities_df=None):
             "act_id": label.act_id,
             "act_type": act_type,
             "start_time": label.start_time * TIME_INTERVAL / 60,  # Convert to hours
-            "duration": label.duration * TIME_INTERVAL / 60,  # Convert to hours
+            # "duration": label.duration * TIME_INTERVAL / 60,  # Convert to hours
+            "duration": label.duration,  # Convert to hours
             "soc_start": label.soc_at_activity_start,
             "soc_end": label.current_soc,
             "is_charging": activity.is_charging,
@@ -436,12 +438,13 @@ def main():
     parser = argparse.ArgumentParser(description="Run EV scheduling DP for a test person/csv.")
     parser.add_argument(
         "--person",
-        default="person_ending_1263",
+        # default="person_ending_1263",
+        default="dylan",
         help="Folder under testing_latest/ containing the activities CSV",
     )
     parser.add_argument(
         "--csv",
-        default="activities_with_charge_values.csv",
+        default="activities_with_service_station.csv",
         help="CSV filename inside the person folder",
     )
     parser.add_argument(

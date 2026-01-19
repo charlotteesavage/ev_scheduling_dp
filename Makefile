@@ -90,5 +90,12 @@ test-clean:
 	@echo "Cleaning tests..."
 	$(MAKE) -C tests clean
 
+# Python helpers (default to conda env dp_new)
+PY_ENV ?= dp_new
+PY := conda run -n $(PY_ENV) python
+
+py-testing-check:
+	$(PY) testing_latest/testing_check.py
+
 # Phony targets (not actual files)
-.PHONY: all clean rebuild run debug help test test-build test-clean
+.PHONY: all clean rebuild run debug help test test-build test-clean py-testing-check

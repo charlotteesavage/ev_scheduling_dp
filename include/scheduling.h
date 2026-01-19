@@ -35,7 +35,7 @@ typedef struct Activity
     int des_duration;   // expressed in # of time intervals
     int des_start_time; // expressed in # of time intervals
 
-    int charge_mode; // Charging mode: 0=none, 1=slow, 2=fast, 3=rapid
+    int charge_mode; // Charging mode: 0=none, 1=slow, 2=fast, 3=rapid, 4=free_slow, 5=free_fast, 6=free_rapid
     int is_charging; // Is charging selected? 1 for yes, 0 for no
 
     int is_service_station; // 1 for yes, 0 for no
@@ -165,6 +165,7 @@ void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_
 void set_activities(Activity *activities_data, int pynum_activities);
 void set_fixed_initial_soc(double soc);
 void clear_fixed_initial_soc(void);
+void set_random_seed(unsigned int seed_value);
 
 // Algorithm functions
 void DP(void);

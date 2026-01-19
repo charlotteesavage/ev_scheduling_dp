@@ -4,6 +4,7 @@ import subprocess
 import os
 import time
 from pathlib import Path
+import argparse
 
 # Constants
 TIME_INTERVAL = 5  # minutes
@@ -70,8 +71,8 @@ Activity._fields_ = [
     ("latest_start", c_int),
     ("min_duration", c_int),
     ("max_duration", c_int),
-    ("x", c_int),
-    ("y", c_int),
+    ("x", c_double),
+    ("y", c_double),
     ("group", c_int),
     ("memory", POINTER(Group_mem)),
     ("des_duration", c_int),
@@ -200,12 +201,87 @@ def compile_code():
 # ===== Data prep functions =====
 
 
+def _validate_and_normalize_activities_df(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """
+    Validate and normalize the activities dataframe into the format expected by the C code.
+
+    Returns (normalized_df, group_offset) where group_offset is either 0 (already 0-based)
+    or 1 (1-based groups to be shifted down).
+    """
+    required_cols = [
+        "id",
+        "x",
+        "y",
+        "group",
+        "earliest_start",
+        "latest_start",
+        "min_duration",
+        "max_duration",
+        "des_start_time",
+        "des_duration",
+        "charge_mode",
+        "is_charging",
+        "is_service_station",
+    ]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Activities CSV missing required columns: {missing}")
+
+    df = df.copy()
+
+    # Ensure ids are contiguous 0..N-1 because we use id as the array index.
+    ids = df["id"].astype(int).tolist()
+    expected = set(range(len(df)))
+    if set(ids) != expected:
+        raise ValueError(
+            "Activities CSV must have contiguous integer ids 0..N-1 (used as array indices). "
+            f"Found min={min(ids)}, max={max(ids)}, len={len(df)}."
+        )
+
+    # Heuristic: accept both 1-based groups (Sheffield data) and already 0-based groups.
+    min_group = int(df["group"].min())
+    max_group = int(df["group"].max())
+    group_offset = 1 if min_group >= 1 else 0
+    if group_offset == 0 and min_group < 0:
+        raise ValueError(
+            f"Invalid group values (must be >= 0). Found min group={min_group}."
+        )
+
+    # Common data bug: min_duration/max_duration swapped.
+    bad_durations = df["max_duration"] < df["min_duration"]
+    if bool(bad_durations.any()):
+        bad_ids = df.loc[bad_durations, "id"].astype(int).tolist()
+        print(
+            f"WARNING: Found {len(bad_ids)} activities with max_duration < min_duration "
+            f"(ids={bad_ids}). Swapping min_duration/max_duration for those rows."
+        )
+        df.loc[bad_durations, ["min_duration", "max_duration"]] = df.loc[
+            bad_durations, ["max_duration", "min_duration"]
+        ].to_numpy()
+
+    # Common data bug: earliest_start/latest_start swapped.
+    bad_windows = df["latest_start"] < df["earliest_start"]
+    if bool(bad_windows.any()):
+        bad_ids = df.loc[bad_windows, "id"].astype(int).tolist()
+        print(
+            f"WARNING: Found {len(bad_ids)} activities with latest_start < earliest_start "
+            f"(ids={bad_ids}). Swapping earliest_start/latest_start for those rows."
+        )
+        df.loc[bad_windows, ["earliest_start", "latest_start"]] = df.loc[
+            bad_windows, ["latest_start", "earliest_start"]
+        ].to_numpy()
+
+    return df, group_offset
+
+
 def initialise_and_personalise_activities(df):
     """
     Create and personalize an array of activities from Sheffield data.
 
     Note: CSV should include dawn (id=0) and dusk (id=max) activities.
     """
+    df, group_offset = _validate_and_normalize_activities_df(df)
+    # unique_acts_without_home = df["act_type"].unique() -1
     max_num_activities = len(df)
     activities_array = (Activity * max_num_activities)()
 
@@ -215,12 +291,13 @@ def initialise_and_personalise_activities(df):
         act_id = int(row["id"])
 
         activities_array[act_id].id = act_id
-        activities_array[act_id].x = int(row["x"])
-        activities_array[act_id].y = int(row["y"])
+        activities_array[act_id].x = float(row["x"])
+        activities_array[act_id].y = float(row["y"])
 
-        # Subtract 1 from all group numbers to align with algorithm's group=0 for home
-        # This makes home=0, which allows multiple visits per day (see mem_contains in utils.c)
-        activities_array[act_id].group = int(row["group"]) - 1
+        # Align with algorithm's group=0 for home.
+        # Most datasets use 1-based groups (home=1). Some test CSVs may already be 0-based.
+        # home=0 allows multiple home visits per day (see mem_contains in utils.c).
+        activities_array[act_id].group = int(row["group"]) - group_offset
 
         activities_array[act_id].earliest_start = int(row["earliest_start"])
         activities_array[act_id].latest_start = int(row["latest_start"])
@@ -270,6 +347,7 @@ def initialize_utility():
         Group 6: Depot/Medical (Service)
         Group 7: Delivery/Visit
         Group 8: Escort/Other/PT Interaction
+        Group 9: Service Station
 
         act_type_to_group = {
         'home': 1,
@@ -309,6 +387,7 @@ def initialize_utility():
     late = [0, -0.79, -3.42, -0.993, -1.54, -1.58, -3.42, -0.578, 0]
     long = [0, -0.201, -0.597, -0.133, -0.0783, -0.209, -0.597, -0.0267, 0]
     short = [0, -4.78, -5.63, 0.528, -0.783, -0.00764, -5.63, 0.134, 0]
+    # short = [0, -4.78, -5.63, -0.528, -0.783, -0.00764, -5.63, -0.134, 0]
 
     return {"asc": asc, "early": early, "late": late, "long": long, "short": short}
 
@@ -405,7 +484,8 @@ def extract_schedule(best_label, activities_array, activities_df=None):
             "act_id": label.act_id,
             "act_type": act_type,
             "start_time": label.start_time * TIME_INTERVAL / 60,  # Convert to hours
-            "duration": label.duration * TIME_INTERVAL / 60,  # Convert to hours
+            # "duration": label.duration * TIME_INTERVAL / 60,  # Convert to hours
+            "duration": label.duration,  # Convert to hours
             "soc_start": label.soc_at_activity_start,
             "soc_end": label.current_soc,
             "is_charging": activity.is_charging,
@@ -430,8 +510,29 @@ def extract_schedule(best_label, activities_array, activities_df=None):
 
 def main():
     """Main execution function."""
+    parser = argparse.ArgumentParser(description="Run EV scheduling DP for a test person/csv.")
+    parser.add_argument(
+        "--person",
+        # default="person_ending_1263",
+        default="dylan",
+        help="Folder under testing_latest/ containing the activities CSV",
+    )
+    parser.add_argument(
+        "--csv",
+        # default="activities_with_charge_values.csv",
+        # default="dylan_activities_from_paper_corrected.csv",
+        default="dylan_DP_schedule.csv",
+        help="CSV filename inside the person folder",
+    )
+    parser.add_argument(
+        "--output-root",
+        default="testing_latest/optimal_schedules",
+        help="Root folder to write optimal schedules into",
+    )
+    args = parser.parse_args()
+
     print("=" * 60)
-    print("Sheffield EV Charging Scheduling Test")
+    print("EV Charging Scheduling Test")
     print("=" * 60)
 
     # Compile C code
@@ -457,18 +558,18 @@ def main():
     lib.get_final_schedule.restype = POINTER(Label)
     lib.free_bucket.restype = None
 
-    # csv_to_load = "test_activities_person_654_work_less_duration.csv"
-    # csv_to_load = "test_activities_person_654.csv"
-    csv_to_load = "test_activities_person_654_with_service_station.csv"
+    csv_to_load = args.csv
 
-    # Paths (data is in parent directory)
-    script_dir = Path(__file__).parent
-    parent_dir = script_dir.parent
-    data_dir = parent_dir / "testing/"
-    activities_dir = data_dir / "activities"
+    person_folder = args.person
+    output_filepath = os.path.join(args.output_root, person_folder)
 
-    # Test with person_654 data
-    activities_file = activities_dir / csv_to_load
+    if not os.path.exists(output_filepath):
+        os.makedirs(output_filepath)
+
+    # Test with person data
+    activities_file = f"testing_latest/{person_folder}/{csv_to_load}"
+    if not os.path.exists(activities_file):
+        raise FileNotFoundError(f"Missing activities file: {activities_file}")
 
     # Load data
     activities_df = pd.read_csv(activities_file)
@@ -500,9 +601,7 @@ def main():
         print(schedule_df.to_string(index=False))
 
         # Save to CSV
-        output_file = (
-            data_dir / f"optimal_schedules/{csv_to_load[:-4]}_optimal_schedule.csv"
-        )
+        output_file = f"{output_filepath}/optimal_schedule"
         schedule_df.to_csv(output_file, index=False)
         print(f"\nSchedule saved to: {output_file}")
 
