@@ -4,7 +4,6 @@ import subprocess
 import os
 import time
 from pathlib import Path
-import argparse
 
 # Constants
 TIME_INTERVAL = 5  # minutes
@@ -434,25 +433,6 @@ def extract_schedule(best_label, activities_array, activities_df=None):
 
 
 def main():
-    """Main execution function."""
-    parser = argparse.ArgumentParser(description="Run EV scheduling DP for a test person/csv.")
-    parser.add_argument(
-        "--person",
-        # default="person_ending_1263",
-        default="dylan",
-        help="Folder under testing_latest/ containing the activities CSV",
-    )
-    parser.add_argument(
-        "--csv",
-        default="activities_with_service_station.csv",
-        help="CSV filename inside the person folder",
-    )
-    parser.add_argument(
-        "--output-root",
-        default="testing_latest/optimal_schedules",
-        help="Root folder to write optimal schedules into",
-    )
-    args = parser.parse_args()
 
     print("=" * 60)
     print("EV Charging Scheduling Test")
@@ -481,13 +461,16 @@ def main():
     lib.get_final_schedule.restype = POINTER(Label)
     lib.free_bucket.restype = None
 
-    csv_to_load = args.csv
+    person_folder = "dylan"
+    person_folder = "person_ending_1263"
+    # csv_to_load = "activities_charging_at_shop.csv"
+    # csv_to_load = "activities_with_separate_service_station.csv"
+    # csv_to_load = "activities_no_charge.csv"
+    csv_to_load = "activities_with_charge_values.csv"
 
-    person_folder = args.person
-    output_filepath = os.path.join(args.output_root, person_folder)
-
-    if not os.path.exists(output_filepath):
-        os.makedirs(output_filepath)
+    output_root = "testing_latest/optimal_schedules"
+    if not os.path.exists(output_root):
+        os.makedirs(output_root)
 
     # Test with person data
     activities_file = f"testing_latest/{person_folder}/{csv_to_load}"
@@ -524,7 +507,10 @@ def main():
         print(schedule_df.to_string(index=False))
 
         # Save to CSV
-        output_file = f"{output_filepath}/optimal_schedule"
+        person_out_dir = os.path.join(output_root, person_folder)
+        if not os.path.exists(person_out_dir):
+            os.makedirs(person_out_dir)
+        output_file = f"{person_out_dir}/{csv_to_load[:-4]}_result"
         schedule_df.to_csv(output_file, index=False)
         print(f"\nSchedule saved to: {output_file}")
 

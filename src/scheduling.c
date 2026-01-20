@@ -535,8 +535,9 @@ static int dominates(Label *L1, Label *L2)
         {
 
             // Exact method v2
-            if (L1->time <= L2->time &&
-                L1->current_soc >= L2->current_soc)
+            if (L1->time <= L2->time
+                // && L1->current_soc >= L2->current_soc
+            )
             {
                 return 2;
             }
@@ -763,7 +764,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
 
         // STEP 2: Update charging for continuing activity
         // Only update SOC and costs here - NO utility changes
-        if (a->is_charging && new_label->current_soc < soc_full)
+        if (a->is_charging && (new_label->current_soc < soc_full || a->is_service_station))
         {
             new_label->charge_duration += 1;
 
@@ -852,7 +853,9 @@ int DSSR(Label *L)
         }
         while (p2 != NULL && cycle == 0)
         { //  checks for a cycle by looking for a previous label with the same group as p. If found, records the activity and group,
-            if (p2->act->group == p1->act->group)
+            // Ignore home (group==0): home is allowed to repeat and should not be treated as a cycle.
+            // if (p2->act->group == p1->act->group)
+            if (p1->act->group != 0 && p2->act->group == p1->act->group)
             {
                 cycle = 1;
                 c_activity = p1->act_id;

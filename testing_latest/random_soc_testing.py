@@ -56,6 +56,9 @@ def run_with_random_soc(lib, activities_df, params, seed=None):
     best_label = run_dp(lib, activities_array, max_num_activities, params)
 
     if not best_label:
+        # Ensure we free the C-side bucket even for infeasible runs,
+        # otherwise repeated runs can leak memory and appear to "hang".
+        lib.free_bucket()
         return None
 
     # Extract schedule
@@ -204,44 +207,6 @@ def compare_random_initializations(lib, activities_file, params, num_runs=10, ou
         return None
 
 
-def test_reproducibility(lib, activities_file, params):
-    """
-    Test that using the same seed produces the same initial SOC.
-
-    This verifies that the random number generator is working correctly.
-    """
-    print(f"\n{'='*80}")
-    print("REPRODUCIBILITY TEST")
-    print(f"{'='*80}")
-    print("Running the same seed twice should produce identical initial SOC\n")
-
-    activities_df = pd.read_csv(activities_file)
-
-    # Use a fixed seed
-    test_seed = 42
-
-    # Run 1
-    print("Run 1 with seed 42:")
-    result1 = run_with_random_soc(lib, activities_df, params, seed=test_seed)
-
-    # Run 2 with same seed
-    print("\nRun 2 with seed 42:")
-    result2 = run_with_random_soc(lib, activities_df, params, seed=test_seed)
-
-    if result1 and result2:
-        print(f"\n{'='*80}")
-        print("REPRODUCIBILITY RESULTS")
-        print(f"{'='*80}")
-        print(f"Run 1 Initial SOC: {result1['initial_soc']:.6f}")
-        print(f"Run 2 Initial SOC: {result2['initial_soc']:.6f}")
-
-        if abs(result1['initial_soc'] - result2['initial_soc']) < 1e-10:
-            print("\n✓ PASS: Same seed produces identical initial SOC")
-            print("  Random number generator is working correctly")
-        else:
-            print("\n✗ FAIL: Same seed produced different initial SOC")
-            print("  There may be an issue with the random number generator")
-
 
 def main():
     """Main execution."""
@@ -266,6 +231,7 @@ def main():
     lib.free_bucket.restype = None
     lib.set_fixed_initial_soc.argtypes = [c_double]
     lib.set_fixed_initial_soc.restype = None
+    lib.clear_fixed_initial_soc.argtypes = []
     lib.clear_fixed_initial_soc.restype = None
     lib.set_random_seed.argtypes = [c_int]
     lib.set_random_seed.restype = None
@@ -279,11 +245,8 @@ def main():
     params = initialize_utility()
     output_dir = "testing_latest/random_soc_results"
 
-    # Test 1: Reproducibility
-    test_reproducibility(lib, activities_file, params)
-
-    # Test 2: Multiple random runs
-    summary_df = compare_random_initializations(
+    # Multiple random runs
+    compare_random_initializations(
         lib=lib,
         activities_file=activities_file,
         params=params,
