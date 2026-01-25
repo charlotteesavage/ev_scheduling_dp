@@ -11,16 +11,10 @@
 
 // Utility functions
 void recursive_print(Label *L);
-Label *find_best(L_list *B, int o);
-
-// Result accessors
-int get_count(void);
-double get_total_time(void);
-Label *get_final_schedule(void);
-
 // Memory management functions
 void create_bucket(int a, int b);
 void free_bucket(void);
+// void free_activity_memories(void);
 
 // Group memory manipulation functions
 Group_mem *createNode(int data);

@@ -1,8 +1,5 @@
 """
 Simple example of running multi-day simulations with SOC carryover.
-
-This is a minimal example showing how to chain days together.
-For a full-featured version, see multi_day_testing.py
 """
 
 import pandas as pd
@@ -68,7 +65,7 @@ def multi_day_test():
         )
 
         # Run the DP algorithm
-        best_label = run_dp(lib, activities_array, max_num_activities, params)
+        best_label, total_time = run_dp(lib, activities_array, max_num_activities, params)
 
         if not best_label:
             print(f"ERROR: No solution found for day {day}")

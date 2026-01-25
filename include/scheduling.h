@@ -155,8 +155,17 @@ extern double beta_delta_soc;
 extern double beta_charge_cost;
 extern double soc_full;
 
+Label *find_best(L_list *B, int o);
+
+// Result accessors
+int get_count(void);
+double get_total_time(void);
+Label *get_final_schedule(void);
+
 // Initialization functions
 void initialize_charge_rates(void);
+void initialise_tou_times_intervals(void);
+double initialise_SOC(unsigned int seed_val);
 void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_penalty,
                             int pytime_interval, double *asc, double *early, double *late,
                             double *longp, double *shortp
@@ -166,6 +175,7 @@ void set_activities(Activity *activities_data, int pynum_activities);
 void set_fixed_initial_soc(double soc);
 void clear_fixed_initial_soc(void);
 void set_random_seed(unsigned int seed_value);
+void set_utility_error_std_dev(double std_dev);
 
 // Algorithm functions
 void DP(void);

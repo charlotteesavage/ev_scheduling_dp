@@ -3,6 +3,7 @@ from ctypes import Structure, c_int, c_double, POINTER, CDLL, c_char
 import subprocess
 import os
 import time
+import datetime as dt
 from pathlib import Path
 
 # Constants
@@ -370,7 +371,7 @@ def run_dp(lib, activities_array, max_num_activities, params):
 
     print(f"Final utility: {best_label.contents.utility:.2f}")
 
-    return best_label
+    return best_label, total_time
 
 
 def extract_schedule(best_label, activities_array, activities_df=None):
@@ -409,7 +410,7 @@ def extract_schedule(best_label, activities_array, activities_df=None):
             "act_type": act_type,
             "start_time": label.start_time * TIME_INTERVAL / 60,  # Convert to hours
             # "duration": label.duration * TIME_INTERVAL / 60,  # Convert to hours
-            "duration": label.duration,  # Convert to hours
+            "duration": label.duration,
             "soc_start": label.soc_at_activity_start,
             "soc_end": label.current_soc,
             "is_charging": activity.is_charging,
@@ -460,13 +461,23 @@ def main():
     lib.main.restype = c_int
     lib.get_final_schedule.restype = POINTER(Label)
     lib.free_bucket.restype = None
+    lib.get_total_time.restype = c_int
+    lib.set_random_seed.argtypes = [c_int]
+    lib.set_random_seed.restype = None
+    lib.set_fixed_initial_soc.argtypes = [c_double]
+    lib.set_fixed_initial_soc.restype = None
+    lib.clear_fixed_initial_soc.argtypes = []
+    lib.clear_fixed_initial_soc.restype = None
+    lib.set_utility_error_std_dev.argtypes = [c_double]
+    lib.set_utility_error_std_dev.restype = None
 
     person_folder = "dylan"
-    person_folder = "person_ending_1263"
+    # person_folder = "person_ending_1263"
+    # csv_to_load = "activities_with_charge_adjusted.csv"
     # csv_to_load = "activities_charging_at_shop.csv"
     # csv_to_load = "activities_with_separate_service_station.csv"
-    # csv_to_load = "activities_no_charge.csv"
-    csv_to_load = "activities_with_charge_values.csv"
+    csv_to_load = "activities_no_charge.csv"
+    # csv_to_load = "activities_with_charge_values.csv"
 
     output_root = "testing_latest/optimal_schedules"
     if not os.path.exists(output_root):
@@ -495,7 +506,19 @@ def main():
     params = initialize_utility()
 
     # Run DP
-    best_label = run_dp(lib, activities_array, max_num_activities, params)
+    # Keep SOC fixed, but use the seed for utility error terms.
+    # fixed_soc = 0.30
+    utility_error_sigma = 0.20  # set 0.0 to disable error terms
+
+    # lib.set_fixed_initial_soc(c_double(fixed_soc))
+    lib.set_utility_error_std_dev(c_double(utility_error_sigma))
+
+    utility_seed = int(time.time())
+    lib.set_random_seed(c_int(utility_seed))
+    # print(f"Fixed initial SOC: {fixed_soc:.2%}")
+    print(f"Utility error sigma: {utility_error_sigma}")
+    print(f"Utility error seed: {utility_seed}")
+    best_label, total_time = run_dp(lib, activities_array, max_num_activities, params)
 
     if best_label:
         # Extract and display schedule (pass activities_df for better display names)
@@ -510,10 +533,10 @@ def main():
         person_out_dir = os.path.join(output_root, person_folder)
         if not os.path.exists(person_out_dir):
             os.makedirs(person_out_dir)
-        output_file = f"{person_out_dir}/{csv_to_load[:-4]}_result"
+        output_file = f"{person_out_dir}/{csv_to_load[:-4]}_result_{dt.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.csv"
         schedule_df.to_csv(output_file, index=False)
         print(f"\nSchedule saved to: {output_file}")
-
+        print(f"total run time = {total_time}")
         # Summary statistics
         print("\n" + "=" * 60)
         print("SUMMARY")

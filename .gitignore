@@ -58,7 +58,8 @@ Thumbs.db
 *.tmp
 *.bak
 
-scripts/
+.cache/
+.matplotlib_cache/
 py
 offcuts/
 data/
