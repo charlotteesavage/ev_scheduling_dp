@@ -11,6 +11,7 @@ import pandas as pd
 from ctypes import c_int, c_double, CDLL, POINTER, c_char
 import time
 import os
+import secrets
 from pathlib import Path
 from testing_check import (
     Activity, Label,
@@ -20,6 +21,20 @@ from testing_check import (
     run_dp,
     extract_schedule
 )
+
+def make_run_seed(run_num: int) -> int:
+    """
+    Generate a per-run seed that is safe to pass through ctypes as c_int.
+
+    Notes:
+    - We keep it within signed 32-bit range to avoid overflow/wrapping surprises.
+    - This seed controls BOTH:
+        1) the random initial SOC draw (when fixed SOC is cleared)
+        2) the cached utility error-term realisation (if utility error std dev > 0)
+    """
+    # Prefer OS randomness; mix in run_num for extra separation.
+    seed = secrets.randbits(31) ^ (run_num * 0x9E3779B1)
+    return int(seed) & 0x7FFFFFFF
 
 
 def run_with_random_soc(lib, activities_df, params, seed=None):
@@ -35,14 +50,14 @@ def run_with_random_soc(lib, activities_df, params, seed=None):
     Returns:
         dict with results
     """
-    # If no seed provided, use time (equivalent to time(NULL) in C)
+    # If no seed provided, generate a safe per-run seed.
     if seed is None:
-        seed = int(time.time())
+        seed = make_run_seed(0)
 
     print(f"\nRunning with seed: {seed}")
 
     # Set the random seed in C code
-    lib.set_random_seed(c_int(seed))
+    lib.set_random_seed(c_int(int(seed) & 0x7FFFFFFF))
 
     # Clear any fixed SOC (we want random)
     lib.clear_fixed_initial_soc()
@@ -53,7 +68,7 @@ def run_with_random_soc(lib, activities_df, params, seed=None):
     )
 
     # Run DP
-    best_label = run_dp(lib, activities_array, max_num_activities, params)
+    best_label, total_time = run_dp(lib, activities_array, max_num_activities, params)
 
     if not best_label:
         # Ensure we free the C-side bucket even for infeasible runs,
@@ -118,9 +133,8 @@ def compare_random_initializations(lib, activities_file, params, num_runs=10, ou
         print(f"RUN {run_num}/{num_runs}")
         print(f"{'='*60}")
 
-        # Generate seed based on current time + offset
-        # This ensures each run gets a different seed even in quick succession
-        seed = int(time.time() * 1000) + run_num  # millisecond precision
+        # Generate a per-run seed (safe for c_int).
+        seed = make_run_seed(run_num)
 
         # Run with random SOC
         result = run_with_random_soc(lib, activities_df, params, seed)
@@ -235,15 +249,21 @@ def main():
     lib.clear_fixed_initial_soc.restype = None
     lib.set_random_seed.argtypes = [c_int]
     lib.set_random_seed.restype = None
+    lib.set_utility_error_std_dev.argtypes = [c_double]
+    lib.set_utility_error_std_dev.restype = None
 
     # Setup
-    activities_file = "testing_latest/person_ending_1263/activities_with_charge_values.csv"
+    activities_file = "testing_latest/dylan/activities_with_charge_shop_errands_and_service_station.csv"
     if not os.path.exists(activities_file):
         print(f"Error: {activities_file} not found")
         return
 
     params = initialize_utility()
-    output_dir = "testing_latest/random_soc_results"
+    output_dir = "testing_latest/random_soc_results/dylan"
+
+    # If you want the utility error terms to be active, set this > 0.0.
+    # (The per-run seed above controls the error-term realisation too.)
+    lib.set_utility_error_std_dev(c_double(0.0))
 
     # Multiple random runs
     compare_random_initializations(

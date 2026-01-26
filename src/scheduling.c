@@ -1,9 +1,6 @@
 /*  Algorythm developped by Fabian Torres & Pierre Hellich
     Semester project Fall 2023
-
-    Given an EV driver's activity preferences and charging constraints,
-    what activities should they do, when, and where should they charge?
-
+    Adapted by Charlotte Savage and Tim Hillel, 2026, for application to EV driver behaviour
     */
 
 #include <stdio.h>
@@ -36,11 +33,115 @@ double energy_consumption_rate = 0.2; // kwh_per_km
 // Initial SOC parameters for normal distribution
 unsigned int seed = 42;            // Default seed for reproducibility (can be changed via set_random_seed())
 double initial_soc_mean = 0.40;    // 30% average starting SOC
-double initial_soc_std_dev = 0.10; // 10% standard deviation
+double initial_soc_std_dev = 0.1;  // 10% standard deviation
 double initial_soc; // Will be set using normal_random() in create_label()
 
 static int fixed_initial_soc_enabled = 0;
 static double fixed_initial_soc_value = 0.30;
+
+// Utility error term: i.i.d. Normal(0, utility_error_std_dev) added on activity transitions.
+static double utility_error_std_dev = 0.0;
+static int rng_seeded = 0;
+
+// Paper-style error terms (Eqs. 2–5): drawn once per "realisation" (per seed) and
+// held fixed during optimisation (DP run).
+static double *eps_participation = NULL; // ε_participation(a)
+static double *eps_start_time = NULL;    // ε_start_time(a)
+static double *eps_duration = NULL;      // ε_duration(a) (applied to previous activity when it ends)
+static double *eps_travel = NULL;        // ε_travel(a,b), flattened N*N
+static double *eps_charging = NULL;      // ε_charging(a,mode), flattened N*8
+static int eps_n = 0;
+static int eps_ready = 0;
+
+static void invalidate_utility_error_terms(void)
+{
+    eps_ready = 0;
+}
+
+static void ensure_utility_error_terms(void)
+{
+    if (utility_error_std_dev <= 0.0 || max_num_activities <= 0 || activities == NULL)
+    {
+        return;
+    }
+
+    int n = max_num_activities;
+    if (!eps_ready || eps_n != n)
+    {
+        eps_participation = realloc(eps_participation, (size_t)n * sizeof(double));
+        eps_start_time = realloc(eps_start_time, (size_t)n * sizeof(double));
+        eps_duration = realloc(eps_duration, (size_t)n * sizeof(double));
+        eps_travel = realloc(eps_travel, (size_t)n * (size_t)n * sizeof(double));
+        eps_charging = realloc(eps_charging, (size_t)n * 8U * sizeof(double));
+        eps_n = n;
+    }
+
+    for (int i = 0; i < n; i++)
+    {
+        eps_participation[i] = normal_random(0.0, utility_error_std_dev);
+        eps_start_time[i] = normal_random(0.0, utility_error_std_dev);
+        eps_duration[i] = normal_random(0.0, utility_error_std_dev);
+        for (int m = 0; m < 8; m++)
+        {
+            eps_charging[i * 8 + m] = normal_random(0.0, utility_error_std_dev);
+        }
+    }
+    for (int i = 0; i < n; i++)
+    {
+        for (int j = 0; j < n; j++)
+        {
+            // No noise for self-travel, or for any travel to/from home (group==0).
+            // This avoids pathological "utility farming" by hopping between multiple home-labelled activities.
+            if (i == j || activities[i].group == 0 || activities[j].group == 0)
+            {
+                eps_travel[i * n + j] = 0.0;
+            }
+            else
+            {
+                eps_travel[i * n + j] = normal_random(0.0, utility_error_std_dev);
+            }
+        }
+    }
+
+    // Don’t inject noise into dummy dawn/dusk activities.
+    if (n >= 1)
+    {
+        eps_participation[0] = 0.0;
+        eps_start_time[0] = 0.0;
+        eps_duration[0] = 0.0;
+        for (int m = 0; m < 8; m++)
+        {
+            eps_charging[0 * 8 + m] = 0.0;
+        }
+    }
+    if (n >= 2)
+    {
+        eps_participation[n - 1] = 0.0;
+        eps_start_time[n - 1] = 0.0;
+        eps_duration[n - 1] = 0.0;
+        for (int m = 0; m < 8; m++)
+        {
+            eps_charging[(n - 1) * 8 + m] = 0.0;
+        }
+    }
+
+    // Also remove noise from any other "home" activities (group==0), if the input CSV contains multiple home nodes.
+    for (int i = 0; i < n; i++)
+    {
+        if (activities[i].group == 0)
+        {
+            eps_participation[i] = 0.0;
+            eps_start_time[i] = 0.0;
+            eps_duration[i] = 0.0;
+            for (int m = 0; m < 8; m++)
+            {
+                eps_charging[i * 8 + m] = 0.0;
+            }
+        }
+    }
+
+    eps_ready = 1;
+}
 
 double slow_charge_power = 7.0;
 double fast_charge_power = 22.0;
@@ -52,13 +153,11 @@ double fast_charge_rate;  // for power 22 kW
 double rapid_charge_rate; // for power 50 kW
 
 // tariffs
-double home_off_peak_price = 0.07;    // GBP/kWh, https://www.moneysavingexpert.com/utilities/ev-energy-tariffs/
+// double home_off_peak_price = 0.07;    // GBP/kWh, https://www.moneysavingexpert.com/utilities/ev-energy-tariffs/
 double home_slow_charge_price = 0.26; // GBP/kWh, for a battery of 60 kWh
 double AC_charge_price = 0.52;        // GBP/kWh
 double public_dc_charge_price = 0.79; // GBP/kWh
-double free_charging = 0;             // when charging is free
 // https://www.which.co.uk/reviews/new-and-used-cars/article/electric-car-charging-guide/how-much-does-it-cost-to-charge-an-electric-car-a8f4g1o7JzXj
-
 
 double tou_peak_factor = 2.5;
 double tou_midpeak_factor = 1.5;
@@ -117,7 +216,7 @@ void initialise_tou_times_intervals(void)
 void initialize_charge_rates(void) // initialise these rates per eqn (39) in paper
 // fraction of battery increase PER TIME INTERVAL in hours
 {
-    double fraction_of_hours_per_interval = time_interval / 60.0;                                 // 5 min = 0.0833 hours
+    double fraction_of_hours_per_interval = time_interval / 60.0;                               // 5 min = 0.0833 hours
     slow_charge_rate = (slow_charge_power / battery_capacity) * fraction_of_hours_per_interval; // fraction of battery charged per time_interval
     fast_charge_rate = (fast_charge_power / battery_capacity) * fraction_of_hours_per_interval;
     rapid_charge_rate = (rapid_charge_power / battery_capacity) * fraction_of_hours_per_interval;
@@ -125,13 +224,17 @@ void initialize_charge_rates(void) // initialise these rates per eqn (39) in pap
 
 double initialise_SOC(unsigned int seed_val)
 {
-    seed_random(seed_val);
+    if (!rng_seeded)
+    {
+        seed_random(seed_val);
+        rng_seeded = 1;
+    }
     double output;
     output = normal_random(initial_soc_mean, initial_soc_std_dev);
 
-    // Clamp to valid SOC range [0.0, 1.0]
-    if (output < 0.0) output = 0.0;
-    if (output > 1.0) output = 1.0;
+    // // Clamp to valid SOC range [0.0, 1.0]
+    // if (output < 0.0) output = 0.0;
+    // if (output > 1.0) output = 1.0;
 
     return output;
 }
@@ -139,6 +242,38 @@ double initialise_SOC(unsigned int seed_val)
 void set_random_seed(unsigned int seed_value)
 {
     seed = seed_value;
+    // Seed immediately so all subsequent random draws (initial SOC, utility error term)
+    // are controlled by this seed.
+    seed_random(seed_value);
+    rng_seeded = 1;
+    invalidate_utility_error_terms();
+}
+
+void set_fixed_initial_soc(double soc)
+{
+    fixed_initial_soc_enabled = 1;
+    fixed_initial_soc_value = soc;
+
+    // Clamp to valid SOC range [0.0, 1.0]
+    if (fixed_initial_soc_value < 0.0)
+        fixed_initial_soc_value = 0.0;
+    if (fixed_initial_soc_value > 1.0)
+        fixed_initial_soc_value = 1.0;
+}
+
+void clear_fixed_initial_soc(void)
+{
+    fixed_initial_soc_enabled = 0;
+}
+
+void set_utility_error_std_dev(double std_dev)
+{
+    if (std_dev < 0.0)
+    {
+        std_dev = 0.0;
+    }
+    utility_error_std_dev = std_dev;
+    invalidate_utility_error_terms();
 }
 
 void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_penalty, int pytime_interval,
@@ -177,6 +312,7 @@ void set_activities(Activity *activities_data, int pynum_activities)
 {
     activities = activities_data;
     max_num_activities = pynum_activities;
+    invalidate_utility_error_terms();
 }
 
 /* Allocates memory for and initializes a new Label with the specified Activity */
@@ -197,6 +333,13 @@ static Label *create_label(Activity *aa)
     L->mem->next = NULL;
     L->mem->previous = NULL;
 
+    // Ensure the RNG is seeded before any random draws (initial SOC and/or utility error term).
+    if (!rng_seeded)
+    {
+        seed_random(seed);
+        rng_seeded = 1;
+    }
+
     // Initialize SOC
     if (fixed_initial_soc_enabled)
     {
@@ -212,6 +355,9 @@ static Label *create_label(Activity *aa)
     L->delta_soc = 0; // clarify what is meant by this cf (10)
     L->charge_cost_at_activity_start = 0;
     L->current_charge_cost = 0;
+
+    // Draw fixed error terms once per realisation (seed), to match the paper formulation.
+    ensure_utility_error_terms();
 
     // L->delta_soc_during_interval = 0; // SOC increase during a single time interval, if occurring
     // L->total_delta_soc = 0; // total SOC increase over charging period so far
@@ -236,7 +382,7 @@ static double distance_x(Activity *a1, Activity *a2) // this will change as we w
 static int travel_time(Activity *a1, Activity *a2) // returns travel time in no of intervals
 {
     double dist = distance_x(a1, a2); // this will change too
-    double minutes = dist / speed; // speed is metres per minute
+    double minutes = dist / speed;    // speed is metres per minute
     int intervals = (int)ceil(minutes / (double)time_interval);
     if (intervals < 0)
     {
@@ -272,14 +418,15 @@ static void get_charge_rate_and_price(Activity *a, double result[2])
 
     case 1: // slow charging
         charge_rate = slow_charge_rate;
-        if (a->group == 0)
-        {
-            charge_price = home_off_peak_price;
-        }
-        if (a->group != 0)
-        {
-            charge_price = AC_charge_price;
-        }
+        charge_price = home_slow_charge_price;
+        // if (a->group == 0)
+        // {
+        //     charge_price = home_slow_charge_price;
+        // }
+        // if (a->group != 0)
+        // {
+        //     charge_price = AC_charge_price;
+        // }
         break;
 
     case 2: // fast charging
@@ -568,10 +715,11 @@ static double update_utility(Label *L)
 // function on the basis of minutes
 // time horizons differences are multiplied to be expressed in minutes from the parameters
 
-
 // check if charging constrants can be used to deal with service stations instead
 // time window constraints between 7am and 11pm, not allowed outside that
 {
+    ensure_utility_error_terms();
+
     // should have an error term, but don't need a cost penalty
     // cost of travel is associated with EV cost only, don't account for EV tax, parking etc
     // to be listed as assumptions at beginning of paper
@@ -588,6 +736,16 @@ static double update_utility(Label *L)
     L->utility += asc_parameters[activity_type];
     L->utility += travel_time_penalty * travel_time(previous_act, act);
 
+    // Paper-style error terms (fixed per realisation).
+    if (eps_ready && act->id >= 0 && act->id < eps_n)
+    {
+        L->utility += eps_participation[act->id];
+    }
+    if (eps_ready && previous_act->id >= 0 && previous_act->id < eps_n && act->id >= 0 && act->id < eps_n)
+    {
+        L->utility += eps_travel[previous_act->id * eps_n + act->id];
+    }
+
     // service station has no duration penalties - its only penalties come from cost of charge
     // so only apply these below to non-home and non service station activities
 
@@ -598,6 +756,10 @@ static double update_utility(Label *L)
                       fmax(0, previous_act->des_duration - previous_L->duration);
         L->utility += long_parameters[previous_activity_type] * time_interval *
                       fmax(0, previous_L->duration - previous_act->des_duration);
+        if (eps_ready && previous_act->id >= 0 && previous_act->id < eps_n)
+        {
+            L->utility += eps_duration[previous_act->id];
+        }
     }
 
     // Early/late start penalty (timing deviation)
@@ -607,6 +769,10 @@ static double update_utility(Label *L)
                       fmax(0, act->des_start_time - L->start_time);
         L->utility += late_parameters[activity_type] * time_interval *
                       fmax(0, L->start_time - act->des_start_time);
+        if (eps_ready && act->id >= 0 && act->id < eps_n)
+        {
+            L->utility += eps_start_time[act->id];
+        }
     }
 
     // SOC anxiety/disutility at activity start (paper Eq. 8 uses SOC_a).
@@ -644,6 +810,17 @@ static double update_utility(Label *L)
         else
         {
             L->utility += beta_charge_cost * previous_L->current_charge_cost;
+        }
+
+        // Charging-specific error term (fixed per realisation).
+        if (eps_ready && previous_act->id >= 0 && previous_act->id < eps_n)
+        {
+            int mode = previous_act->charge_mode;
+            if (mode < 0)
+                mode = 0;
+            if (mode > 7)
+                mode = 7;
+            L->utility += eps_charging[previous_act->id * 8 + mode];
         }
     }
 
@@ -684,7 +861,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
         new_label->start_time = current_label->time + travel_time(current_label->act, a);
         new_label->mem = unionLinkedLists(current_label->mem, a->memory, a->group);
 
-        // do we want the below to be by interval, or do it across min_duration???
+        //  below to be by interval, maybe adapt across min_duration in future
         if (a->id == max_num_activities - 1)
         {                                                              // d'ou le saut chelou a la fin : DUSK (pas de utility pour dusk)
             new_label->duration = horizon - new_label->start_time - 1; // set to 0 before
@@ -706,7 +883,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
         new_label->delta_soc = 0;
         new_label->charge_cost_at_activity_start = current_label->current_charge_cost;
         // STEP 1b: Calculate charging for first interval of new activity (if charging)
-        //  This must happen BEFORE calling update_utility so that utility calculation has access to charging data
+        //  This must happen before calling update_utility so that utility calculation has access to charging data
         //  need to adapt this to deal with the situation where
         //  charging will be completed BEFORE activity is over
         //  - so there will be time spent idle at the charger

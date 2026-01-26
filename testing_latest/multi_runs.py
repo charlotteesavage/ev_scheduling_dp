@@ -65,7 +65,7 @@ def multi_run_test(seed: int | None = None):
     lib.set_random_seed.restype = None
 
     # Load activities
-    activities_file = "testing_latest/person_ending_1263/activities_with_charge_values.csv"
+    activities_file = "testing_latest/dylan/activities_no_charge.csv"
     activities_df = pd.read_csv(activities_file)
 
     # Initialize parameters
@@ -113,7 +113,7 @@ def multi_run_test(seed: int | None = None):
 
     times = []
     t0 = time.perf_counter()
-    for run in range(1000):
+    for run in range(10000):
         lib.main(0, None)
         times.append(float(lib.get_total_time()))
         lib.free_bucket()

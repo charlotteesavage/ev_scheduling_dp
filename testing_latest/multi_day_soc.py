@@ -1,7 +1,3 @@
-"""
-Simple example of running multi-day simulations with SOC carryover.
-"""
-
 import pandas as pd
 import random
 import os
@@ -16,7 +12,7 @@ from testing_check import (
 
 
 def multi_day_test():
-    """Run a simple 3-day test with SOC carryover."""
+    """Run a 3-day test with SOC carryover."""
 
     # Compile and load library
     lib_path = compile_code()

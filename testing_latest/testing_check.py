@@ -309,10 +309,18 @@ def initialize_utility():
 
     asc = [0, 10.6, 16.1, 11.3, 17.4, 12, 16.1, 6.76, 0]
     early = [0, -1.37, -1.73, -2.51, -2.56, -0.031, -1.73, -2.55, 0]
-    late = [0, -0.79, -3.42, -0.993, -1.54, -1.58, -3.42, -0.578, 0]
-    long = [0, -0.201, -0.597, -0.133, -0.0783, -0.209, -0.597, -0.0267, 0]
-    short = [0, -4.78, -5.63, 0.528, -0.783, -0.00764, -5.63, 0.134, 0]
+    late = [0, -0.79, -3.42, -0.993, -1.54, -1.58, -3.42, -0.578, -0.61]
+    long = [0, -0.201, -0.597, -0.133, -0.0783, -0.209, -0.597, -0.0267, -0.24]
+    short = [0, -4.78, -5.63, 0.528, -0.783, -0.00764, -5.63, 0.134, -0.61]
     # short = [0, -4.78, -5.63, -0.528, -0.783, -0.00764, -5.63, -0.134, 0]
+
+    # In the paper formulation, timing/duration deviation parameters are penalties (non-positive).
+    # Some legacy vectors had positive entries, which turns "penalties" into large rewards for
+    # deviating (e.g., leaving very early when des_duration is large), causing exploding utilities.
+    early = [min(0.0, float(x)) for x in early]
+    late = [min(0.0, float(x)) for x in late]
+    long = [min(0.0, float(x)) for x in long]
+    short = [min(0.0, float(x)) for x in short]
 
     return {"asc": asc, "early": early, "late": late, "long": long, "short": short}
 
@@ -473,11 +481,15 @@ def main():
 
     person_folder = "dylan"
     # person_folder = "person_ending_1263"
-    # csv_to_load = "activities_with_charge_adjusted.csv"
+    # person_folder = "person_ending_1259"
     # csv_to_load = "activities_charging_at_shop.csv"
-    # csv_to_load = "activities_with_separate_service_station.csv"
-    csv_to_load = "activities_no_charge.csv"
-    # csv_to_load = "activities_with_charge_values.csv"
+    # csv_to_load = "activities_charging_at_shop_free.csv"
+    csv_to_load = "activities_with_charge_shop_errands_and_service_station.csv"
+    # csv_to_load = "activities_with_service_station_and_work_charge.csv"
+    # csv_to_load = "activities_with_charge_at_work_only.csv"
+    # csv_to_load = "activities_with_charge_adjusted.csv"
+
+    # csv_to_load = "activities_with_charge_at_shop.csv"
 
     output_root = "testing_latest/optimal_schedules"
     if not os.path.exists(output_root):
@@ -507,8 +519,8 @@ def main():
 
     # Run DP
     # Keep SOC fixed, but use the seed for utility error terms.
-    # fixed_soc = 0.30
-    utility_error_sigma = 0.20  # set 0.0 to disable error terms
+    # fixed_soc = 0.80
+    utility_error_sigma = 1.0  # set 0.0 to disable error terms
 
     # lib.set_fixed_initial_soc(c_double(fixed_soc))
     lib.set_utility_error_std_dev(c_double(utility_error_sigma))

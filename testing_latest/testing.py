@@ -4,7 +4,6 @@ import subprocess
 import os
 import time
 from pathlib import Path
-import argparse
 
 # Constants
 TIME_INTERVAL = 5  # minutes
@@ -48,6 +47,7 @@ group_to_type = {
     8: "escort/other",
     9: "service_station",
 }
+
 
 
 class Group_mem(Structure):
@@ -115,163 +115,9 @@ L_list._fields_ = [
     ("element", POINTER(Label)),
     ("previous", POINTER(L_list)),
     ("next", POINTER(L_list)),
-]
-
-# ===== C Compilation =====
-
-
-def compile_code():
-    """Compile the scheduling C code as a shared library for Python ctypes."""
-    # Get the current directory and parent directory
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    parent_dir = os.path.dirname(current_dir)
-
-    # Define paths (src and include are in parent directory)
-    src_dir = os.path.join(parent_dir, "src")
-    inc_dir = os.path.join(parent_dir, "include")
-    output_lib = os.path.join(current_dir, "scheduling.so")
-
-    # Source files to compile
-    sources = [
-        os.path.join(src_dir, "scheduling.c"),
-        os.path.join(src_dir, "utils.c"),
-        os.path.join(src_dir, "main.c"),
     ]
 
-    # Check if recompilation is needed
-    needs_recompile = False
-    if not os.path.exists(output_lib):
-        needs_recompile = True
-        print("No existing compiled library found")
-    else:
-        # Check if any source file is newer than the compiled library
-        lib_mtime = os.path.getmtime(output_lib)
-        for src_file in sources:
-            if os.path.getmtime(src_file) > lib_mtime:
-                needs_recompile = True
-                print(
-                    f"Source file {os.path.basename(src_file)} is newer than compiled library"
-                )
-                break
 
-        # Also check header files
-        if not needs_recompile:
-            for header_file in os.listdir(inc_dir):
-                if header_file.endswith(".h"):
-                    header_path = os.path.join(inc_dir, header_file)
-                    if os.path.getmtime(header_path) > lib_mtime:
-                        needs_recompile = True
-                        print(
-                            f"Header file {header_file} is newer than compiled library"
-                        )
-                        break
-
-        if not needs_recompile:
-            print(f"Using existing compiled library: {output_lib}")
-            return output_lib
-
-    compile_command = (
-        [
-            "gcc",
-            "-m64",
-            "-O3",
-            "-shared",
-            "-fPIC",
-            f"-I{inc_dir}",
-            "-o",
-            output_lib,
-        ]
-        + sources
-        + ["-lm"]
-    )
-
-    print(f"Compiling C code: {' '.join(compile_command)}")
-    result = subprocess.run(compile_command, capture_output=True, text=True)
-
-    if result.returncode != 0:
-        print("Compilation failed!")
-        print(f"STDERR: {result.stderr}")
-        raise RuntimeError("Failed to compile C code")
-    else:
-        print(f"Compilation successful! Created {output_lib}")
-
-    return output_lib
-
-
-# ===== Data prep functions =====
-
-
-def _validate_and_normalize_activities_df(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    """
-    Validate and normalize the activities dataframe into the format expected by the C code.
-
-    Returns (normalized_df, group_offset) where group_offset is either 0 (already 0-based)
-    or 1 (1-based groups to be shifted down).
-    """
-    required_cols = [
-        "id",
-        "x",
-        "y",
-        "group",
-        "earliest_start",
-        "latest_start",
-        "min_duration",
-        "max_duration",
-        "des_start_time",
-        "des_duration",
-        "charge_mode",
-        "is_charging",
-        "is_service_station",
-    ]
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        raise ValueError(f"Activities CSV missing required columns: {missing}")
-
-    df = df.copy()
-
-    # Ensure ids are contiguous 0..N-1 because we use id as the array index.
-    ids = df["id"].astype(int).tolist()
-    expected = set(range(len(df)))
-    if set(ids) != expected:
-        raise ValueError(
-            "Activities CSV must have contiguous integer ids 0..N-1 (used as array indices). "
-            f"Found min={min(ids)}, max={max(ids)}, len={len(df)}."
-        )
-
-    # Heuristic: accept both 1-based groups (Sheffield data) and already 0-based groups.
-    min_group = int(df["group"].min())
-    max_group = int(df["group"].max())
-    group_offset = 1 if min_group >= 1 else 0
-    if group_offset == 0 and min_group < 0:
-        raise ValueError(
-            f"Invalid group values (must be >= 0). Found min group={min_group}."
-        )
-
-    # Common data bug: min_duration/max_duration swapped.
-    bad_durations = df["max_duration"] < df["min_duration"]
-    if bool(bad_durations.any()):
-        bad_ids = df.loc[bad_durations, "id"].astype(int).tolist()
-        print(
-            f"WARNING: Found {len(bad_ids)} activities with max_duration < min_duration "
-            f"(ids={bad_ids}). Swapping min_duration/max_duration for those rows."
-        )
-        df.loc[bad_durations, ["min_duration", "max_duration"]] = df.loc[
-            bad_durations, ["max_duration", "min_duration"]
-        ].to_numpy()
-
-    # Common data bug: earliest_start/latest_start swapped.
-    bad_windows = df["latest_start"] < df["earliest_start"]
-    if bool(bad_windows.any()):
-        bad_ids = df.loc[bad_windows, "id"].astype(int).tolist()
-        print(
-            f"WARNING: Found {len(bad_ids)} activities with latest_start < earliest_start "
-            f"(ids={bad_ids}). Swapping earliest_start/latest_start for those rows."
-        )
-        df.loc[bad_windows, ["earliest_start", "latest_start"]] = df.loc[
-            bad_windows, ["latest_start", "earliest_start"]
-        ].to_numpy()
-
-    return df, group_offset
 
 
 def initialise_and_personalise_activities(df):
@@ -280,7 +126,6 @@ def initialise_and_personalise_activities(df):
 
     Note: CSV should include dawn (id=0) and dusk (id=max) activities.
     """
-    df, group_offset = _validate_and_normalize_activities_df(df)
     # unique_acts_without_home = df["act_type"].unique() -1
     max_num_activities = len(df)
     activities_array = (Activity * max_num_activities)()
@@ -295,9 +140,8 @@ def initialise_and_personalise_activities(df):
         activities_array[act_id].y = float(row["y"])
 
         # Align with algorithm's group=0 for home.
-        # Most datasets use 1-based groups (home=1). Some test CSVs may already be 0-based.
         # home=0 allows multiple home visits per day (see mem_contains in utils.c).
-        activities_array[act_id].group = int(row["group"]) - group_offset
+        activities_array[act_id].group = int(row["group"]) - 1
 
         activities_array[act_id].earliest_start = int(row["earliest_start"])
         activities_array[act_id].latest_start = int(row["latest_start"])
@@ -392,61 +236,140 @@ def initialize_utility():
     return {"asc": asc, "early": early, "late": late, "long": long, "short": short}
 
 
-# ===== Main Execution =====
+# ===== C Compilation =====
 
 
-def run_dp(lib, activities_array, max_num_activities, params):
-    """Run the DP algorithm."""
-    print("\n" + "=" * 60)
-    print("Running DP Algorithm...")
-    print("=" * 60)
+def compile_code():
+    """Compile the scheduling C code as a shared library for Python ctypes."""
+    # Get the current directory and parent directory
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
 
-    # Convert parameters to C arrays
-    asc_array = (c_double * len(params["asc"]))(*params["asc"])
-    early_array = (c_double * len(params["early"]))(*params["early"])
-    late_array = (c_double * len(params["late"]))(*params["late"])
-    long_array = (c_double * len(params["long"]))(*params["long"])
-    short_array = (c_double * len(params["short"]))(*params["short"])
+    # Define paths (src and include are in parent directory)
+    src_dir = os.path.join(parent_dir, "src")
+    inc_dir = os.path.join(parent_dir, "include")
+    output_lib = os.path.join(current_dir, "scheduling.so")
 
-    lib.set_general_parameters(
-        HORIZON,
-        SPEED,
-        TRAVEL_TIME_PENALTY,
-        TIME_INTERVAL,
-        asc_array,
-        early_array,
-        late_array,
-        long_array,
-        short_array,
+    # Source files to compile
+    sources = [
+        os.path.join(src_dir, "scheduling.c"),
+        os.path.join(src_dir, "utils.c"),
+        os.path.join(src_dir, "main.c"),
+    ]
+
+    # Check if recompilation is needed
+    needs_recompile = False
+    if not os.path.exists(output_lib):
+        needs_recompile = True
+        print("No existing compiled library found")
+    else:
+        # Check if any source file is newer than the compiled library
+        lib_mtime = os.path.getmtime(output_lib)
+        for src_file in sources:
+            if os.path.getmtime(src_file) > lib_mtime:
+                needs_recompile = True
+                print(
+                    f"Source file {os.path.basename(src_file)} is newer than compiled library"
+                )
+                break
+
+        # Also check header files
+        if not needs_recompile:
+            for header_file in os.listdir(inc_dir):
+                if header_file.endswith(".h"):
+                    header_path = os.path.join(inc_dir, header_file)
+                    if os.path.getmtime(header_path) > lib_mtime:
+                        needs_recompile = True
+                        print(
+                            f"Header file {header_file} is newer than compiled library"
+                        )
+                        break
+
+        if not needs_recompile:
+            print(f"Using existing compiled library: {output_lib}")
+            return output_lib
+
+    compile_command = (
+        [
+            "gcc",
+            "-m64",
+            "-O3",
+            "-shared",
+            "-fPIC",
+            f"-I{inc_dir}",
+            "-o",
+            output_lib,
+        ]
+        + sources
+        + ["-lm"]
     )
 
-    # Set activities
-    lib.set_activities(activities_array, max_num_activities)
+    print(f"Compiling C code: {' '.join(compile_command)}")
+    result = subprocess.run(compile_command, capture_output=True, text=True)
 
-    print(f"Number of activities: {max_num_activities}")
-    print(f"Horizon: {HORIZON} intervals ({HORIZON * TIME_INTERVAL / 60:.1f} hours)")
-    print("Starting DP...")
+    if result.returncode != 0:
+        print("Compilation failed!")
+        print(f"STDERR: {result.stderr}")
+        raise RuntimeError("Failed to compile C code")
+    else:
+        print(f"Compilation successful! Created {output_lib}")
 
-    # Run main (creates bucket, runs DP, handles DSSR)
-    # Pass dummy argc=0, argv=NULL since we're not using command line args
-    start_time = time.time()
-    result = lib.main(0, None)
-    total_time = time.time() - start_time
+    return output_lib
 
-    print(f"C main() returned: {result}")
+# ===== Main Execution =====
 
-    print(f"\nDP completed in {total_time:.2f} seconds")
+# def run_dp(lib, activities_array, max_num_activities, params):
+#     """Run the DP algorithm."""
+#     print("\n" + "=" * 60)
+#     print("Running DP Algorithm...")
+#     print("=" * 60)
 
-    # Get final schedule
-    best_label = lib.get_final_schedule()
+#     # Convert parameters to C arrays
+#     asc_array = (c_double * len(params["asc"]))(*params["asc"])
+#     early_array = (c_double * len(params["early"]))(*params["early"])
+#     late_array = (c_double * len(params["late"]))(*params["late"])
+#     long_array = (c_double * len(params["long"]))(*params["long"])
+#     short_array = (c_double * len(params["short"]))(*params["short"])
 
-    if not best_label:
-        print("ERROR: No feasible solution found!")
-        return None
+#     lib.set_general_parameters(
+#         HORIZON,
+#         SPEED,
+#         TRAVEL_TIME_PENALTY,
+#         TIME_INTERVAL,
+#         asc_array,
+#         early_array,
+#         late_array,
+#         long_array,
+#         short_array,
+#     )
 
-    print(f"Final utility: {best_label.contents.utility:.2f}")
+#     # Set activities
+#     lib.set_activities(activities_array, max_num_activities)
 
-    return best_label
+#     print(f"Number of activities: {max_num_activities}")
+#     print(f"Horizon: {HORIZON} intervals ({HORIZON * TIME_INTERVAL / 60:.1f} hours)")
+#     print("Starting DP...")
+
+#     # Run main (creates bucket, runs DP, handles DSSR)
+#     # Pass dummy argc=0, argv=NULL since we're not using command line args
+#     start_time = time.time()
+#     result = lib.main(0, None)
+#     total_time = time.time() - start_time
+
+#     print(f"C main() returned: {result}")
+
+#     print(f"\nDP completed in {total_time:.2f} seconds")
+
+#     # Get final schedule
+#     best_label = lib.get_final_schedule()
+
+#     if not best_label:
+#         print("ERROR: No feasible solution found!")
+#         return None
+
+#     print(f"Final utility: {best_label.contents.utility:.2f}")
+
+#     return best_label
 
 
 def extract_schedule(best_label, activities_array, activities_df=None):
@@ -509,39 +432,15 @@ def extract_schedule(best_label, activities_array, activities_df=None):
 
 
 def main():
-    """Main execution function."""
-    parser = argparse.ArgumentParser(description="Run EV scheduling DP for a test person/csv.")
-    parser.add_argument(
-        "--person",
-        # default="person_ending_1263",
-        default="dylan",
-        help="Folder under testing_latest/ containing the activities CSV",
-    )
-    parser.add_argument(
-        "--csv",
-        # default="activities_with_charge_values.csv",
-        # default="dylan_activities_from_paper_corrected.csv",
-        default="dylan_DP_schedule.csv",
-        help="CSV filename inside the person folder",
-    )
-    parser.add_argument(
-        "--output-root",
-        default="testing_latest/optimal_schedules",
-        help="Root folder to write optimal schedules into",
-    )
-    args = parser.parse_args()
+    print("**** Executing test runs ****")
 
-    print("=" * 60)
-    print("EV Charging Scheduling Test")
-    print("=" * 60)
-
-    # Compile C code
     lib_path = compile_code()
+    print(f"Library is at:{lib_path}")
     lib = CDLL(lib_path)
 
-    # Set up C function signatures
+
     lib.set_general_parameters.argtypes = [
-        c_int,  # horizon
+                c_int,  # horizon
         c_double,  # speed
         c_double,  # travel_time_penalty
         c_int,  # time_interval
@@ -557,71 +456,90 @@ def main():
     lib.main.restype = c_int
     lib.get_final_schedule.restype = POINTER(Label)
     lib.free_bucket.restype = None
+    lib.get_total_time.restype = c_int
 
-    csv_to_load = args.csv
+    # ========== input info ===========
+    person_folder = "person_ending_1263"
+    csv_to_load = "activities_with_charge_values.csv"
+    output_root = "testing_latest/optimal_schedules"
+    runs = 1000
 
-    person_folder = args.person
-    output_filepath = os.path.join(args.output_root, person_folder)
+    if not os.path.exists(output_root):
+        os.makedirs(output_root)
 
-    if not os.path.exists(output_filepath):
-        os.makedirs(output_filepath)
-
-    # Test with person data
     activities_file = f"testing_latest/{person_folder}/{csv_to_load}"
-    if not os.path.exists(activities_file):
-        raise FileNotFoundError(f"Missing activities file: {activities_file}")
 
-    # Load data
+
+    # ========== execution prelims ===========
     activities_df = pd.read_csv(activities_file)
 
-    print(f"Loaded {len(activities_df)} activities")
-    print(f"Activities with charging: {activities_df['is_charging'].sum()}")
-    print(f"Charge modes: {activities_df['charge_mode'].value_counts().to_dict()}")
-
-    # individual = load_test_individual(individual_file)
-
-    # Initialize activities
     activities_array, max_num_activities = initialise_and_personalise_activities(
         activities_df
     )
 
-    # Initialize utility parameters
     params = initialize_utility()
+    asc_array = (c_double * len(params["asc"]))(*params["asc"])
+    early_array = (c_double * len(params["early"]))(*params["early"])
+    late_array = (c_double * len(params["late"]))(*params["late"])
+    long_array = (c_double * len(params["long"]))(*params["long"])
+    short_array = (c_double * len(params["short"]))(*params["short"])
 
-    # Run DP
-    best_label = run_dp(lib, activities_array, max_num_activities, params)
+    lib.set_general_parameters(
+        HORIZON,
+        SPEED,
+        TRAVEL_TIME_PENALTY,
+        TIME_INTERVAL,
+        asc_array,
+        early_array,
+        late_array,
+        long_array,
+        short_array,
+    )
+    lib.set_activities(activities_array, max_num_activities)
+    # lib.set_fixed_initial_soc(c_double(float(0.3)))
 
-    if best_label:
-        # Extract and display schedule (pass activities_df for better display names)
-        schedule_df = extract_schedule(best_label, activities_array, activities_df)
+    # best_label = run_dp(lib, activities_array, max_num_activities, params)
 
-        print("\n" + "=" * 60)
-        print("OPTIMAL SCHEDULE")
-        print("=" * 60)
-        print(schedule_df.to_string(index=False))
+    # ========== runs! ===========
+    # times = []
+    # t0 = time.perf_counter()
+    # for i in range(runs):
+    #     lib.main(0, None)
+    #     times.append(float(lib.get_total_time()))
+    #     lib.free_bucket()
+    
+    # wall_time = time.perf_counter()-t0
 
-        # Save to CSV
-        output_file = f"{output_filepath}/optimal_schedule"
-        schedule_df.to_csv(output_file, index=False)
-        print(f"\nSchedule saved to: {output_file}")
+    for _ in range(max(0, 5)): # warmups
+        lib.main(0, None)
+        lib.free_bucket()
 
-        # Summary statistics
-        print("\n" + "=" * 60)
-        print("SUMMARY")
-        print("=" * 60)
-        print(f"Total activities: {len(schedule_df)}")
-        print(f"Charging sessions: {schedule_df['is_charging'].sum()}")
-        print(f"Total charging time: {schedule_df['charge_duration'].sum():.2f} hours")
-        print(f"Total charging cost: £{schedule_df['charge_cost'].max():.2f}")
-        print(f"Final SOC: {schedule_df['soc_end'].iloc[-1]:.2%}")
-        print(f"Total utility: {schedule_df['utility'].iloc[-1]:.2f}")
-
-    # Cleanup
-    lib.free_bucket()
-    print("\n" + "=" * 60)
-    print("Test complete!")
-    print("=" * 60)
+    times = []
+    t0 = time.perf_counter()
+    for i in range(runs):
+        lib.main(0, None)
+        times.append(float(lib.get_total_time()))
+        lib.free_bucket()
+    
+    wall_time = time.perf_counter()-t0
 
 
-if __name__ == "__main__":
-    main()
+
+#     start_time = time.time()
+#     result = lib.main(0, None)
+#     total_time = time.time() - start_time
+
+#     print(f"C main() returned: {result}")
+
+#     print(f"\nDP completed in {total_time:.2f} seconds")
+
+#     # Get final schedule
+#     best_label = lib.get_final_schedule()
+
+#     if not best_label:
+#         print("ERROR: No feasible solution found!")
+#         return None
+
+#     print(f"Final utility: {best_label.contents.utility:.2f}")
+
+#     return best_label
