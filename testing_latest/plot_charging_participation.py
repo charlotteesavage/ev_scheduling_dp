@@ -18,29 +18,11 @@ import matplotlib.pyplot as plt
 import sys
 import os
 
-# Activity colors matching the provided example graph
-ACTIVITY_COLORS = {
-    'Leisure': '#9370DB',
-    'Service Station': '#1E90FF',
-    'Shopping': '#FF8C00',
-    'Work': '#8B4513',
-    'Errands_services': '#DC143C',
-    'Escort': '#FF69B4',
-    'Home': '#808080',
-    'Business': '#32CD32',
-    'Education': '#FFD700',
-    'Other': '#20B2AA',
-    'Medical': '#FF6347',
-    'PT Interaction': '#4682B4',
-}
 
 
 def plot_charging_distribution(csv_file, output_file=None, title=None):
     """
     Create a stacked bar chart showing the DISTRIBUTION of charging events.
-
-    Unlike plot_charging_participation, this normalizes so ALL values sum to 100%.
-    This shows: "Of all charging that occurred, X% was at activity Y during hour Z"
 
     Parameters:
     -----------
@@ -89,15 +71,11 @@ def plot_charging_distribution(csv_file, output_file=None, title=None):
     # Create figure
     fig, ax = plt.subplots(figsize=(14, 6))
 
-    # Get colors for each activity
-    colors = [ACTIVITY_COLORS.get(col, '#CCCCCC') for col in df_normalized.columns]
-
     # Create stacked bar chart
     df_normalized.plot(
         kind='bar',
         stacked=True,
         ax=ax,
-        color=colors,
         width=0.8,
         edgecolor='none'
     )
