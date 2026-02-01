@@ -36,7 +36,7 @@ def multi_day_test():
     lib.clear_fixed_initial_soc.restype = None
 
     # Load activities
-    activities_file = "testing_latest/person_ending_1263/activities_with_charge_values.csv"
+    activities_file = "testing_latest/person_ending_1259/activities_with_charge_at_shop_free_and_service_station.csv"
     activities_df = pd.read_csv(activities_file)
 
     # Initialize parameters

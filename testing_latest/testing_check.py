@@ -5,6 +5,7 @@ import os
 import time
 import datetime as dt
 from pathlib import Path
+from typing import Iterable, Optional
 
 # Constants
 TIME_INTERVAL = 5  # minutes
@@ -484,10 +485,13 @@ def main():
     # person_folder = "person_ending_1259"
     # csv_to_load = "activities_charging_at_shop.csv"
     # csv_to_load = "activities_charging_at_shop_free.csv"
-    csv_to_load = "activities_with_charge_shop_errands_and_service_station.csv"
+    # csv_to_load = "activities_with_charge_shop_errands_and_service_station.csv"
     # csv_to_load = "activities_with_service_station_and_work_charge.csv"
     # csv_to_load = "activities_with_charge_at_work_only.csv"
-    # csv_to_load = "activities_with_charge_adjusted.csv"
+    csv_to_load = (
+        "activities_with_charge_shop_errands_and_service_station_shop_free.csv"
+    )
+    # csv_to_load= "activities_with_charge_at_shop_and_service_station.csv"
 
     # csv_to_load = "activities_with_charge_at_shop.csv"
 

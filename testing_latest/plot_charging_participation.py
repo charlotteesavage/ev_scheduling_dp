@@ -35,81 +35,6 @@ ACTIVITY_COLORS = {
 }
 
 
-def plot_charging_participation(csv_file, output_file=None, title=None):
-    """
-    Create stacked bar chart from charging participation CSV.
-
-    Parameters:
-    -----------
-    csv_file : str
-        Path to charging_participation_by_hour.csv
-    output_file : str
-        Path to save figure (optional)
-    title : str
-        Custom title for the plot
-    """
-    # Load data
-    df = pd.read_csv(csv_file, index_col='hour')
-
-    print(f"Loaded data from: {csv_file}")
-    print(f"Activity types: {list(df.columns)}")
-    print(f"Peak participation: {df.sum(axis=1).max():.1f}% at hour {df.sum(axis=1).idxmax()}")
-
-    # Create figure
-    fig, ax = plt.subplots(figsize=(14, 6))
-
-    # Get colors for each activity
-    colors = [ACTIVITY_COLORS.get(col, '#CCCCCC') for col in df.columns]
-
-    # Create stacked bar chart
-    df.plot(
-        kind='bar',
-        stacked=True,
-        ax=ax,
-        color=colors,
-        width=0.8,
-        edgecolor='none'
-    )
-
-    # Customize plot
-    ax.set_xlabel('Hour of the Day', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Percentage of charging participation', fontsize=12, fontweight='bold')
-
-    if title:
-        ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
-    else:
-        ax.set_title('Charging Participation by Activity Type and Hour',
-                     fontsize=14, fontweight='bold', pad=20)
-
-    # Format x-axis labels
-    hours_labels = [f"{h}:00" for h in range(24)]
-    ax.set_xticklabels(hours_labels, rotation=45, ha='right')
-
-    # Format y-axis as percentage
-    ax.set_ylim(0, None)
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0f}%'))
-
-    # Grid
-    ax.grid(axis='y', alpha=0.3, linestyle='--', linewidth=0.5)
-    ax.set_axisbelow(True)
-
-    # Legend
-    ax.legend(title='Activity', bbox_to_anchor=(1.05, 1), loc='upper left',
-             frameon=True, fancybox=True, shadow=True)
-
-    # Tight layout
-    plt.tight_layout()
-
-    # Save if output file specified
-    if output_file:
-        plt.savefig(output_file, dpi=300, bbox_inches='tight')
-        print(f"Saved chart to: {output_file}")
-
-    plt.show()
-
-    return fig, ax
-
-
 def plot_charging_distribution(csv_file, output_file=None, title=None):
     """
     Create a stacked bar chart showing the DISTRIBUTION of charging events.
@@ -202,16 +127,17 @@ def plot_charging_distribution(csv_file, output_file=None, title=None):
     # Legend with total percentages
     legend_labels = []
     for col in df_normalized.columns:
-        total_pct = df_normalized[col].sum()
-        legend_labels.append(f'{col} ({total_pct:.1f}%)')
+        # total_pct = df_normalized[col].sum()
+        # legend_labels.append(f'{col} ({total_pct:.1f}%)')
+        legend_labels.append(f'{col}')
 
-    ax.legend(legend_labels, title='Activity (% of total)',
+    ax.legend(legend_labels, title='Activity',
              bbox_to_anchor=(1.05, 1), loc='upper left',
-             frameon=True, fancybox=True, shadow=True)
+             frameon=True)
 
-    # Add text annotation showing total
-    fig.text(0.99, 0.01, f'Total: {total_check:.1f}%',
-             ha='right', va='bottom', fontsize=9, style='italic', color='gray')
+    # # Add text annotation showing total
+    # fig.text(0.99, 0.01, f'Total: {total_check:.1f}%',
+    #          ha='right', va='bottom', fontsize=9, style='italic', color='gray')
 
     # Tight layout
     plt.tight_layout()
@@ -230,36 +156,17 @@ def main():
     """Main function."""
     # Default files
     csv_file = "testing_latest/charging_participation_results/charging_participation_by_hour.csv"
-    output_file_participation = "testing_latest/charging_participation_results/charging_participation_chart.png"
     output_file_distribution = "testing_latest/charging_participation_results/charging_distribution_chart.png"
 
-    # Check if file exists
     if not os.path.exists(csv_file):
         print(f"Error: Data file not found: {csv_file}")
-        print("\nPlease run the analysis first:")
-        print("  python3 run_charging_analysis.py")
+        print("\nEither:")
+        print("  - Pass an all_schedules.csv path to this script, OR")
+        print("  - Generate charging_participation_by_hour.csv first")
         sys.exit(1)
 
-    # Create participation plot (original - % of runs with charging at each hour)
-    print("Creating charging participation chart...")
-    print("(Shows: % of simulation runs with charging at each hour)")
-    plot_charging_participation(csv_file, output_file_participation)
-
-    print("\n" + "=" * 80)
-
-    # Create distribution plot (normalized - all bars sum to 100%)
     print("Creating charging distribution chart...")
-    print("(Shows: Distribution of all charging events - sums to 100%)")
     plot_charging_distribution(csv_file, output_file_distribution)
-
-    print("\n" + "=" * 80)
-    print("Done!")
-    print("\nCreated two charts:")
-    print(f"  1. Participation: {output_file_participation}")
-    print(f"     (Shows % of runs with charging at each hour)")
-    print(f"  2. Distribution: {output_file_distribution}")
-    print(f"     (Shows how charging is distributed across time - sums to 100%)")
-
 
 if __name__ == "__main__":
     main()

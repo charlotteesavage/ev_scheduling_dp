@@ -1,9 +1,0 @@
-id,act_type,x,y,group,earliest_start,latest_start,min_duration,max_duration,des_start_time,des_duration,charge_mode,is_charging,is_service_station
-0,home,451322.0,396724.0,1,0,0,1,286,0,0,0,0,0
-1,home,451322.0,396724.0,1,0,288,144,216,0,180,0,0,0
-2,other/escort,449714.0,399146.0,8,0,288,1,22,182,10,0,0,0
-3,delivery/errands,451235.0,393088.0,7,84,276,9,33,200,22,3,1,1
-4,other/escort,449714.0,399146.0,8,0,288,1,12,226,1,0,0,0
-5,shop/visit,445403.0,398604.0,4,0,288,6,30,232,18,4,1,0
-6,home,451322.0,396724.0,1,0,288,1,286,0,0,0,0,0
-7,home,451322.0,396724.0,1,0,286,1,286,0,0,0,0,0

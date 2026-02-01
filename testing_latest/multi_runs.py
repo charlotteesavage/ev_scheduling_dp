@@ -17,6 +17,7 @@ from testing_check import (
     # extract_schedule
 )
 import time
+import random
 
 # Constants
 TIME_INTERVAL = 5  # minutes
@@ -56,6 +57,8 @@ def multi_run_test(seed: int | None = None):
     lib.main.argtypes = [c_int, POINTER(POINTER(c_char))]
     lib.main.restype = c_int
     lib.get_final_schedule.restype = POINTER(Label)
+    lib.get_total_time.argtypes = []
+    lib.get_total_time.restype = c_double
     lib.free_bucket.restype = None
     lib.set_fixed_initial_soc.argtypes = [c_double]
     lib.set_fixed_initial_soc.restype = None
@@ -75,11 +78,13 @@ def multi_run_test(seed: int | None = None):
     # current_soc = 0.30  # 30%
     # current_soc = random.uniform(0, 1)
     # Seed once per program run; every call to normal_random() will then produce
-    # a new draw as the RNG state advances.
+    # # a new draw as the RNG state advances.
     if seed is None:
         seed = secrets.randbits(31)
     base_seed = seed_c_rng(lib, seed)
     print(f"Base RNG seed: {base_seed}")
+    # Use a separate Python RNG to generate a new initial SOC every run (reproducible if base_seed is fixed).
+    soc_rng = random.Random(base_seed)
     # lib.set_fixed_initial_soc(c_double(current_soc))
 
     asc_array = (c_double * len(params["asc"]))(*params["asc"])
@@ -108,12 +113,17 @@ def multi_run_test(seed: int | None = None):
 
     print("runs for warmup")
     for run in range(5):
+        current_soc = soc_rng.random()  # Uniform in [0, 1)
+        lib.set_fixed_initial_soc(c_double(current_soc))
         lib.main(0, None)
         lib.free_bucket()
 
     times = []
     t0 = time.perf_counter()
-    for run in range(10000):
+    print("running main runs")
+    for run in range(150000):
+        current_soc = soc_rng.random()  # Uniform in [0, 1)
+        lib.set_fixed_initial_soc(c_double(current_soc))
         lib.main(0, None)
         times.append(float(lib.get_total_time()))
         lib.free_bucket()
@@ -121,6 +131,7 @@ def multi_run_test(seed: int | None = None):
     wall = time.perf_counter() - t0
 
     print(f"total wall seconds: {wall:.3f}")
+    print(f"sum of C get_total_time seconds: {sum(times):.3f}")
     print(
         "C get_total_time (s): mean={:.6f} stdev={:.6f} min={:.6f} max={:.6f}".format(
             statistics.mean(times),
