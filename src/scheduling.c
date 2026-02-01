@@ -45,11 +45,11 @@ static int rng_seeded = 0;
 // Utility error terms
 // draw them ONCE at the start of each DP() run, store them in arrays, and then
 // update_utility() just looks them up.
-static double *eps_participation = NULL; // per activity id
-static double *eps_start_time = NULL;    // per activity id
-static double *eps_duration = NULL;      // per activity id (applied when an activity ends)
-static double *eps_travel = NULL;        // per (from_id,to_id), flattened n*n
-static double *eps_charging = NULL;      // per (activity id, charge_mode), flattened n*8
+static double *eps_participation = NULL; 
+static double *eps_start_time = NULL;    
+static double *eps_duration = NULL;     
+static double *eps_travel = NULL;    
+static double *eps_charging = NULL; 
 static int eps_n = 0;
 
 static void free_utility_error_terms(void)
@@ -277,10 +277,6 @@ void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_
     initialize_charge_rates();
     initialise_tou_times_intervals();
 
-    // printf("speed = %f, travel_time_penalty = %f, curfew_time = %d, max_outside_time = %d, max_travel_time = %d, peak_hour_time1 = %d, peak_hour_time2 = %d, time_interval = %d\n",
-    //         speed, travel_time_penalty, curfew_time, max_outside_time, max_travel_time, peak_hour_time1,
-    //         peak_hour_time2, horizon, time_interval);
-
     for (int i = 0; i < 9; i++)
     {
         asc_parameters[i] = asc[i];
@@ -288,9 +284,7 @@ void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_
         late_parameters[i] = late[i];
         long_parameters[i] = longp[i];
         short_parameters[i] = shortp[i];
-        // printf("asc[%d] = %f, early[%d] = %f, late[%d] = %f, longp[%d] = %f, shortp[%d] = %f\n",
-        //        i, asc_parameters[i], i, early_parameters[i], i, late_parameters[i],
-        //        i, long_parameters[i], i, short_parameters[i]);
+
     }
 };
 
@@ -340,8 +334,6 @@ static Label *create_label(Activity *aa)
     L->delta_soc = 0; // clarify what is meant by this cf (10)
     L->charge_cost_at_activity_start = 0;
     L->current_charge_cost = 0;
-
-    // Error terms are drawn once per DP() run (see DP()).
 
     // L->delta_soc_during_interval = 0; // SOC increase during a single time interval, if occurring
     // L->total_delta_soc = 0; // total SOC increase over charging period so far
