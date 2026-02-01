@@ -1,148 +1,41 @@
-# Activity Scheduling Optimizer
+# EV Activity Scheduling (DP + Charging)
 
-A dynamic programming-based activity scheduling optimizer that uses a hybrid C/Python implementation for efficient computation of individual activity schedules.
+This repo contains a dynamic programming (label-setting) scheduler for an individual EV user’s daily activity plan. The core algorithm is implemented in C (`src/`) and is typically run from Python via `ctypes` for convenience and data handling.
 
-## Project Overview
+## What it does
+- Takes a set of candidate activities (time windows, min/max durations, locations, etc.) from a CSV.
+- Runs a label-setting DP over a 24h horizon (5-minute intervals) to select an “optimal” activity sequence.
+- Tracks EV-specific state and constraints inside the recursion, including travel energy use (SoC depletion) and charging (SoC increase + charging cost).
+- Writes an output schedule CSV with start times, durations, SoC trajectory, charging time, and cumulative utility/cost.
 
-This project implements an activity scheduling optimization algorithm that:
-- Uses dynamic programming to find optimal activity schedules
-- Interfaces C code (for performance) with Python (for data processing)
-- Processes population data and activity constraints
-- Supports multiple scenario simulations
+## Main entrypoint (manual schedule checker)
+The main “schedule checker” script is:
+- `testing_latest/testing_check.py`
 
-## System Requirements
+It:
+- Compiles the C code into a shared library (`testing_latest/scheduling.so`) when needed.
+- Loads an activities CSV, runs the DP, and writes an output schedule CSV under `testing_latest/optimal_schedules/`.
 
-### Dependencies
-- **Python**: 3.9 or higher
-- **C Compiler**: GCC (for compiling shared libraries)
-- **Operating System**: macOS or Linux
-
-### Python Packages
-Core dependencies (specified in `pyproject.toml`):
-- `numpy >= 2.0.0` - Numerical computations and array operations
-- `pandas >= 2.0.0` - Data manipulation and CSV handling
-- `tqdm >= 4.60.0` - Progress bars for long-running computations
-
-Development dependencies:
-- `pytest >= 8.0.0` - Testing framework
-
-## Installation
-
-### Using Conda (Recommended)
-
-If using the conda environment `dp_new`:
-
+Run it with:
 ```bash
-# Activate the environment
-conda activate dp_new
-
-# Install dependencies from pyproject.toml
-pip install -e .
+./py testing_latest/testing_check.py
 ```
 
-### Alternative: Create New Environment
-
+There is also a Makefile helper:
 ```bash
-# Create new conda environment
-conda create -n dp_new python=3.12
-conda activate dp_new
-
-# Install dependencies
-pip install -e .
+make py-testing-check
 ```
 
-## Project Structure
+## Unit/validation tests
+Validation tests live in:
+- `testing_latest/validation_tests/`
 
-```
-scheduling_code/
-├── pyproject.toml           # Project dependencies and metadata
-├── README.md                # This file
-├── Makefile                 # Build configuration for C code
-├── main_slice_cs.py         # Main scheduling script
-├── test_compilation.py      # C compilation test script
-├── scheduling_CS.c          # Core scheduling algorithm (C)
-├── scheduling_CS.h          # C header file
-├── scheduling_main.c        # C main function
-├── scheduling_CS.so         # Compiled shared library (generated)
-└── cloe_covid_paper_code/   # Additional code from original paper
-```
-
-## Building the Project
-
-The C code must be compiled into a shared library before running the Python scripts.
-
-### Using Make:
+Run them with:
 ```bash
-make
+./py testing_latest/validation_tests/run_validation_tests.py
 ```
 
-### Manual Compilation:
-```bash
-gcc -m64 -O3 -shared -fPIC -o scheduling_CS.so scheduling_CS.c scheduling_main.c -lm
-```
+## Notes
+- `environment.yml` contains the conda environment used by the `./py` helper script (defaults to the `dp_new` env; override with `DP_CONDA_ENV`).
+- The C-only build (executable) is available via `make`, but most workflows use the Python scripts in `testing_latest/`.
 
-### Testing Compilation:
-```bash
-python test_compilation.py
-```
-
-## Usage
-
-### Running the Optimizer
-
-```bash
-python main_slice_cs.py
-```
-
-The main script will:
-1. Compile the C code automatically
-2. Load population and activity data
-3. Run optimization for specified scenarios
-4. Save results to the output directory
-
-### Configuration
-
-Key parameters in `main_slice_cs.py`:
-- `LOCAL`: Geographic location (default: "NewYork")
-- `TIME_INTERVAL`: Time discretization in minutes (default: 5)
-- `HORIZON`: Time horizon for scheduling (24 hours)
-- `num_act_to_select`: Number of activities to consider per individual (default: 15)
-
-## Development
-
-### Running Tests
-
-```bash
-# Test C compilation and library loading
-python test_compilation.py
-
-# Run pytest (if tests are added)
-pytest
-```
-
-### Code Structure
-
-The project uses Python's `ctypes` library to interface with C code:
-- **Python side**: Data loading, preprocessing, result handling
-- **C side**: Performance-critical optimization algorithms
-
-## Notes for Supervisors
-
-This is a research project implementing activity scheduling optimization. The hybrid C/Python approach allows for:
-- **Performance**: C implementation for computationally intensive DP algorithms
-- **Flexibility**: Python for data processing and analysis
-- **Reproducibility**: Explicit dependency management via `pyproject.toml`
-
-The algorithm optimizes individual daily schedules considering:
-- Activity time windows and durations
-- Travel times between locations
-- Utility functions for schedule quality
-- Various scenario constraints (e.g., COVID-19 restrictions)
-
-## License
-
-[Add your license information here]
-
-## Contact
-
-Charlotte Savage - [Your contact information]

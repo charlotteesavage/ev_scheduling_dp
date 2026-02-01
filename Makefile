@@ -4,37 +4,50 @@
 
 # Compiler settings
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -std=c11
+CFLAGS = -Wall -Wextra -O2 -std=c11 -Iinclude
 LDFLAGS = -lm
 
+# Directories
+SRC_DIR = src
+INC_DIR = include
+OBJ_DIR = obj
+BIN_DIR = bin
+
 # Target executable name
-TARGET = scheduling_CS
+TARGET = $(BIN_DIR)/scheduling
 
-# Source files
-SOURCES = scheduling_CS.c scheduling_main.c
-HEADERS = scheduling_CS.h
+# Source files (with paths)
+SOURCES = $(SRC_DIR)/scheduling.c $(SRC_DIR)/main.c $(SRC_DIR)/utils.c
+HEADERS = $(INC_DIR)/scheduling.h $(INC_DIR)/utils.h
 
-# Object files (automatically derived from sources)
-OBJECTS = $(SOURCES:.c=.o)
+# Object files (in obj directory)
+OBJECTS = $(OBJ_DIR)/scheduling.o $(OBJ_DIR)/main.o $(OBJ_DIR)/utils.o
 
 # Default target - builds the executable
 all: $(TARGET)
 
 # Link object files to create the executable
-$(TARGET): $(OBJECTS)
+$(TARGET): $(OBJECTS) | $(BIN_DIR)
 	@echo "Linking $@..."
 	$(CC) $(OBJECTS) -o $(TARGET) $(LDFLAGS)
 	@echo "Build successful! Executable: $(TARGET)"
 
-# Compile .c files to .o files
-%.o: %.c $(HEADERS)
+# Create directories if they don't exist
+$(BIN_DIR):
+	@mkdir -p $(BIN_DIR)
+
+$(OBJ_DIR):
+	@mkdir -p $(OBJ_DIR)
+
+# Compile .c files to .o files in obj directory
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c $(HEADERS) | $(OBJ_DIR)
 	@echo "Compiling $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Clean up build artifacts
 clean:
 	@echo "Cleaning up..."
-	rm -f $(OBJECTS) $(TARGET)
+	rm -rf $(OBJ_DIR) $(BIN_DIR)
 	rm -rf *.dSYM
 	@echo "Clean complete!"
 
@@ -43,7 +56,7 @@ rebuild: clean all
 
 # Run the program (requires implementation of proper initialization)
 run: $(TARGET)
-	./$(TARGET)
+	$(TARGET)
 
 # Debug build (with debugging symbols and no optimization)
 debug: CFLAGS = -Wall -Wextra -g -std=c11
@@ -59,7 +72,30 @@ help:
 	@echo "  make rebuild  - Clean and rebuild everything"
 	@echo "  make run      - Build and run the program"
 	@echo "  make debug    - Build with debug symbols"
+	@echo "  make test     - Build and run test suite"
+	@echo "  make test-build - Build tests only (don't run)"
+	@echo "  make test-clean - Clean test artifacts"
 	@echo "  make help     - Show this help message"
 
+# Test targets (delegates to tests/Makefile)
+test:
+	@echo "Running tests..."
+	$(MAKE) -C tests test
+
+test-build:
+	@echo "Building tests..."
+	$(MAKE) -C tests
+
+test-clean:
+	@echo "Cleaning tests..."
+	$(MAKE) -C tests clean
+
+# Python helpers (default to conda env dp_new)
+PY_ENV ?= dp_new
+PY := conda run -n $(PY_ENV) python
+
+py-testing-check:
+	$(PY) testing_latest/testing_check.py
+
 # Phony targets (not actual files)
-.PHONY: all clean rebuild run debug help
+.PHONY: all clean rebuild run debug help test test-build test-clean py-testing-check

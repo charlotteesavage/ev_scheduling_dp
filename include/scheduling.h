@@ -1,10 +1,10 @@
 /*  Algorythm developped by Fabian Torres & Pierre Hellich
     Semester project Fall 2023                              */
 
-#ifndef SCHEDULING_CS_H
-#define SCHEDULING_CS_H
+#ifndef SCHEDULING_H
+#define SCHEDULING_H
 
-#include <stdbool.h>
+// #include <stdbool.h>
 
 /////////////////////////////////////////////////////////////
 ///////////////////////// STRUCTS ////////////////////////////
@@ -21,40 +21,39 @@ struct Group_mem
 };
 
 typedef struct Activity
+// id encompasses unique combo of type, charging mode, and location!!!!
 {
     int id; // this is a unique node identifier, different from group_id
-    int earliest_start;
-    int latest_start;
-    int min_duration;
-    int max_duration;
-    int x;
-    int y;
+    int earliest_start; // expressed in # of time intervals
+    int latest_start;   // expressed in # of time intervals
+    int min_duration;   // expressed in # of time intervals
+    int max_duration;   // expressed in # of time intervals
+    double x;
+    double y;
     int group; // this is the activity type
     Group_mem *memory;
-    int des_duration;
-    int des_start_time;
+    int des_duration;   // expressed in # of time intervals
+    int des_start_time; // expressed in # of time intervals
 
-    int can_charge; // 1 for yes, 0 for no
-
-    int slow_charging_available; // binary variable: 1 if available, 0 if higher vals available
-    int fast_charging_available; // binary variable: 1 if available, 0 otherwise
-    int rapid_charging_available;
-
-    // double charging_price_slow;
-    // double charging_price_fast;
-    // double charging_price_rapid;
+    int charge_mode; // Charging mode: 0=none, 1=slow, 2=fast, 3=rapid, 4=free_slow, 5=free_fast, 6=free_rapid
+    int is_charging; // Is charging selected? 1 for yes, 0 for no
 
     int is_service_station; // 1 for yes, 0 for no
+
 } Activity;
+
+// decision variable for: charging, which charge mode, need a duplication of a for every kind of charging you might do
+// just pick fastest charge mode available
+// want to expand to pick the optimal, not just fastest in the future
 
 typedef struct Label Label; // holds data about a particular state or decision at a certain step in the process
 struct Label
-{                   // like a tree
-    int act_id;     // additional activity identifier ? (faster than L->act->id)
-    int time;       // current time
+{
+    int act_id;     // unique activity identifier (faster than L->act->id)
+    int time;       // current time in number of intervals since dawn
     int start_time; // lets you compute the start time penalty (early/late) and check the activity's time window
     // ^^ feeds the cost update when you enter a *new* activity
-    int duration; // time since the start of current activity
+    int duration; // time since the start of current activity in minutes
     //  ^^ lets you check min/max duration constraint & compute the duration penalty (short/long)
     // for the activity that just finished when you switch to the next activity (see update_utility)
     int deviation_start;
@@ -63,15 +62,18 @@ struct Label
     // they are book-keeping/diagnostic features and could be used in dominance rules
     // They are not the objective, the real penalties are added inside update_utility
 
-    double soc;          // battery state of charge at the start of activity 𝑎
-    int is_charging;     // Is charging scheduled? (0 or 1)
-    int charge_mode;     // Charging mode: 0=none, 1=slow, 2=fast, 3=rapid
-    int charge_duration; // Time spent charging (in time intervals)
-    double delta_soc;    // SOC increase during this charging time, if occurring
+    double soc_at_activity_start; // battery state of charge at the start of activity 𝑎
+    double current_soc;           // battery state in activity - relevant for charging activities
+    // double delta_soc_during_interval; // SOC increase during this charging time, if occurring
+    // double total_delta_soc;
+    // double soc; // check this - might be parsed from individual data
+    double delta_soc; // amount of battery charge increase at a single interval, expressed as % of battery capacity i.e. SOC
 
-    double wasted_charger_time;
+    int charge_duration; // cumulative time spent charging at current activity (resets to zero when move to new activity)
 
-    double charge_cost; // cumulative charging cost
+    // double wasted_charger_time;
+    double charge_cost_at_activity_start; // cumulative charge cost at the start of activity 𝑎
+    double current_charge_cost; // cumulative charging cost up to end of current interval
 
     double utility; // cumulative utility
 
@@ -93,11 +95,11 @@ struct L_list
 };
 
 // Global constants
-extern int time_interval;
+extern int time_interval; // fixed width of time interval eg 5 mins
 extern double speed;
 extern double travel_time_penalty;
-extern int horizon;
-extern int num_activities;
+extern int horizon; // total no of time intervals
+extern int max_num_activities;
 extern L_list **bucket;
 extern Activity *activities;
 extern int DSSR_count;
@@ -126,6 +128,7 @@ extern double free_charging;
 extern double tou_peak_factor;
 extern double tou_midpeak_factor;
 extern double tou_offpeak_factor;
+
 extern int peak_start;
 extern int peak_end;
 extern int midpeak1_start;
@@ -134,12 +137,14 @@ extern int midpeak2_start;
 extern int midpeak2_end;
 
 // Utility parameters
-extern double asc_parameters[5];
-extern double early_parameters[5];
-extern double late_parameters[5];
-extern double long_parameters[5];
-extern double short_parameters[5];
-extern int flex, mid_flex, not_flex;
+// Note: Array size must accommodate the maximum group number used in activities
+// After preprocessing (group-1): groups 0-7, so we need size 8
+extern double asc_parameters[9];
+extern double early_parameters[9];
+extern double late_parameters[9];
+extern double long_parameters[9];
+extern double short_parameters[9];
+// extern int flex, mid_flex, not_flex;
 
 // Charging utility parameters
 extern double gamma_charge_work;
@@ -148,18 +153,8 @@ extern double gamma_charge_home;
 extern double theta_soc;
 extern double beta_delta_soc;
 extern double beta_charge_cost;
-extern int soc_full;
+extern double soc_full;
 
-// Initialization functions
-void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_penalty,
-                            int pytime_interval, double *asc, double *early, double *late,
-                            double *longp, double *shortp, int pyflexible, int pymid_flex,
-                            int pynot_flex);
-void set_activities(Activity *activities_data, int pynum_activities);
-void initialize_charge_rates(void);
-
-// Utility functions
-void recursive_print(Label *L);
 Label *find_best(L_list *B, int o);
 
 // Result accessors
@@ -167,13 +162,23 @@ int get_count(void);
 double get_total_time(void);
 Label *get_final_schedule(void);
 
-// Execution functions
-// Memory management functions
-void create_bucket(int a, int b);
-void free_bucket(void);
+// Initialization functions
+void initialize_charge_rates(void);
+void initialise_tou_times_intervals(void);
+double initialise_SOC(unsigned int seed_val);
+void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_penalty,
+                            int pytime_interval, double *asc, double *early, double *late,
+                            double *longp, double *shortp
+
+);
+void set_activities(Activity *activities_data, int pynum_activities);
+void set_fixed_initial_soc(double soc);
+void clear_fixed_initial_soc(void);
+void set_random_seed(unsigned int seed_value);
+void set_utility_error_std_dev(double std_dev);
 
 // Algorithm functions
 void DP(void);
 int DSSR(Label *L);
 
-#endif // SCHEDULING_CS_H
+#endif // SCHEDULING_H

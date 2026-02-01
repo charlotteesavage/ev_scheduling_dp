@@ -33,14 +33,17 @@ ENV/
 *.out
 *.dSYM/
 
+# Build directories
+bin/
+obj/
+
+
 # Output and data files
 output/
-*.csv
 *.json
 
 # Jupyter Notebooks (if you add any)
 .ipynb_checkpoints/
-*.ipynb
 
 # Testing
 .pytest_cache/
@@ -55,5 +58,12 @@ Thumbs.db
 *.tmp
 *.bak
 
-
-scheduling_CS_with_additional_constraint_code.c
+.cache/
+.matplotlib_cache/
+py
+offcuts/
+data/
+dylan_data/
+not_in_play/
+tests/
+new_offcuts/

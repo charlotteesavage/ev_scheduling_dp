@@ -1,0 +1,6 @@
+id,act_type,x,y,group,earliest_start,latest_start,min_duration,max_duration,des_start_time,des_duration,charge_mode,is_charging,is_service_station
+0,home,0.0,0.0,1,0,0,1,288,0,80,0,0,0
+1,home,0.0,0.0,1,150,288,1,138,240,60,0,0,0
+2,shop_a,1000.0,0.0,4,50,100,10,30,70,20,0,0,0
+3,shop_b,2000.0,0.0,4,50,120,10,30,90,20,0,0,0
+4,work,3000.0,0.0,2,50,140,20,40,100,30,0,0,0
