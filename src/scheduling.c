@@ -1,9 +1,6 @@
 /*  Algorythm developped by Fabian Torres & Pierre Hellich
     Semester project Fall 2023
-
-    Given an EV driver's activity preferences and charging constraints,
-    what activities should they do, when, and where should they charge?
-
+    Adapted by Charlotte Savage and Tim Hillel, 2026, for application to EV driver behaviour
     */
 
 #include <stdio.h>
@@ -36,15 +33,103 @@ double energy_consumption_rate = 0.2; // kwh_per_km
 // Initial SOC parameters for normal distribution
 unsigned int seed = 42;            // Default seed for reproducibility (can be changed via set_random_seed())
 double initial_soc_mean = 0.40;    // 30% average starting SOC
-double initial_soc_std_dev = 0.10; // 10% standard deviation
-double initial_soc;                // Will be set using normal_random() in create_label()
+double initial_soc_std_dev = 0.1;  // 10% standard deviation
+double initial_soc; // Will be set using normal_random() in create_label()
 
 static int fixed_initial_soc_enabled = 0;
 static double fixed_initial_soc_value = 0.30;
 
-// Utility error term: i.i.d. Normal(0, utility_error_std_dev) added on activity transitions.
-static double utility_error_std_dev = 1;
+static double utility_error_std_dev = 1.0;
 static int rng_seeded = 0;
+
+// Utility error terms
+// draw them ONCE at the start of each DP() run, store them in arrays, and then
+// update_utility() just looks them up.
+static double *eps_participation = NULL; // per activity id
+static double *eps_start_time = NULL;    // per activity id
+static double *eps_duration = NULL;      // per activity id (applied when an activity ends)
+static double *eps_travel = NULL;        // per (from_id,to_id), flattened n*n
+static double *eps_charging = NULL;      // per (activity id, charge_mode), flattened n*8
+static int eps_n = 0;
+
+static void free_utility_error_terms(void)
+{
+    free(eps_participation);
+    free(eps_start_time);
+    free(eps_duration);
+    free(eps_travel);
+    free(eps_charging);
+    eps_participation = NULL;
+    eps_start_time = NULL;
+    eps_duration = NULL;
+    eps_travel = NULL;
+    eps_charging = NULL;
+    eps_n = 0;
+}
+
+static void draw_utility_error_terms_for_dp(void)
+{
+    // No noise requested => free any old arrays and exit.
+    if (utility_error_std_dev <= 0.0 || max_num_activities <= 0 || activities == NULL)
+    {
+        free_utility_error_terms();
+        return;
+    }
+
+    int n = max_num_activities;
+    if (eps_n != n)
+    {
+        free_utility_error_terms();
+        eps_participation = (double *)malloc((size_t)n * sizeof(double));
+        eps_start_time = (double *)malloc((size_t)n * sizeof(double));
+        eps_duration = (double *)malloc((size_t)n * sizeof(double));
+        eps_travel = (double *)malloc((size_t)n * (size_t)n * sizeof(double));
+        eps_charging = (double *)malloc((size_t)n * 8U * sizeof(double));
+        eps_n = n;
+    }
+
+    // Draw all the errors we might need.
+    for (int i = 0; i < n; i++)
+    {
+        eps_participation[i] = normal_random(0.0, utility_error_std_dev);
+        eps_start_time[i] = normal_random(0.0, utility_error_std_dev);
+        eps_duration[i] = normal_random(0.0, utility_error_std_dev);
+        for (int mode = 0; mode < 8; mode++)
+        {
+            eps_charging[i * 8 + mode] = normal_random(0.0, utility_error_std_dev);
+        }
+    }
+    for (int from = 0; from < n; from++)
+    {
+        for (int to = 0; to < n; to++)
+        {
+            // Keep travel noise off for self-travel and any travel to/from home (group==0).
+            if (from == to || activities[from].group == 0 || activities[to].group == 0)
+            {
+                eps_travel[from * n + to] = 0.0;
+            }
+            else
+            {
+                eps_travel[from * n + to] = normal_random(0.0, utility_error_std_dev);
+            }
+        }
+    }
+
+    // Don’t inject noise into any "home" activities (including dummy dawn/dusk).
+    for (int i = 0; i < n; i++)
+    {
+        if (activities[i].group == 0)
+        {
+            eps_participation[i] = 0.0;
+            eps_start_time[i] = 0.0;
+            eps_duration[i] = 0.0;
+            for (int mode = 0; mode < 8; mode++)
+            {
+                eps_charging[i * 8 + mode] = 0.0;
+            }
+        }
+    }
+}
 
 double slow_charge_power = 7.0;
 double fast_charge_power = 22.0;
@@ -56,7 +141,7 @@ double fast_charge_rate;  // for power 22 kW
 double rapid_charge_rate; // for power 50 kW
 
 // tariffs
-double home_off_peak_price = 0.07;    // GBP/kWh, https://www.moneysavingexpert.com/utilities/ev-energy-tariffs/
+// double home_off_peak_price = 0.07;    // GBP/kWh, https://www.moneysavingexpert.com/utilities/ev-energy-tariffs/
 double home_slow_charge_price = 0.26; // GBP/kWh, for a battery of 60 kWh
 double AC_charge_price = 0.52;        // GBP/kWh
 double public_dc_charge_price = 0.79; // GBP/kWh
@@ -144,7 +229,7 @@ double initialise_SOC(unsigned int seed_val)
 
 void set_random_seed(unsigned int seed_value)
 {
-    // seed = seed_value;
+    seed = seed_value;
     // Seed immediately so all subsequent random draws (initial SOC, utility error term)
     // are controlled by this seed.
     seed_random(seed_value);
@@ -255,6 +340,8 @@ static Label *create_label(Activity *aa)
     L->delta_soc = 0; // clarify what is meant by this cf (10)
     L->charge_cost_at_activity_start = 0;
     L->current_charge_cost = 0;
+
+    // Error terms are drawn once per DP() run (see DP()).
 
     // L->delta_soc_during_interval = 0; // SOC increase during a single time interval, if occurring
     // L->total_delta_soc = 0; // total SOC increase over charging period so far
@@ -629,9 +716,14 @@ static double update_utility(Label *L)
     L->utility = previous_L->utility;
 
     L->utility += asc_parameters[activity_type];
-    L->utility += normal_random(0.0, utility_error_std_dev);
     L->utility += travel_time_penalty * travel_time(previous_act, act);
-    L->utility += normal_random(0.0, utility_error_std_dev);
+
+    // Error terms (drawn once per DP run). If std dev is 0, these arrays are NULL and add 0.
+    if (eps_participation != NULL)
+    {
+        L->utility += eps_participation[act->id];
+        L->utility += eps_travel[previous_act->id * eps_n + act->id];
+    }
 
     // service station has no duration penalties - its only penalties come from cost of charge
     // so only apply these below to non-home and non service station activities
@@ -643,7 +735,10 @@ static double update_utility(Label *L)
                       fmax(0, previous_act->des_duration - previous_L->duration);
         L->utility += long_parameters[previous_activity_type] * time_interval *
                       fmax(0, previous_L->duration - previous_act->des_duration);
-        L->utility += normal_random(0.0, utility_error_std_dev);
+        if (eps_duration != NULL)
+        {
+            L->utility += eps_duration[previous_act->id];
+        }
     }
 
     // Early/late start penalty (timing deviation)
@@ -653,7 +748,10 @@ static double update_utility(Label *L)
                       fmax(0, act->des_start_time - L->start_time);
         L->utility += late_parameters[activity_type] * time_interval *
                       fmax(0, L->start_time - act->des_start_time);
-        L->utility += normal_random(0.0, utility_error_std_dev);
+        if (eps_start_time != NULL)
+        {
+            L->utility += eps_start_time[act->id];
+        }
     }
 
     // SOC anxiety/disutility at activity start (paper Eq. 8 uses SOC_a).
@@ -692,8 +790,19 @@ static double update_utility(Label *L)
         {
             L->utility += beta_charge_cost * previous_L->current_charge_cost;
         }
-        L->utility += normal_random(0.0, utility_error_std_dev);
+
+        // Charging-specific error term (drawn once per DP run).
+        if (eps_charging != NULL)
+        {
+            int mode = previous_act->charge_mode;
+            if (mode < 0)
+                mode = 0;
+            if (mode > 7)
+                mode = 7;
+            L->utility += eps_charging[previous_act->id * 8 + mode];
+        }
     }
+
     return L->utility;
 };
 
@@ -731,7 +840,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
         new_label->start_time = current_label->time + travel_time(current_label->act, a);
         new_label->mem = unionLinkedLists(current_label->mem, a->memory, a->group);
 
-        // do we want the below to be by interval, or do it across min_duration???
+        //  below to be by interval, maybe adapt across min_duration in future
         if (a->id == max_num_activities - 1)
         {                                                              // d'ou le saut chelou a la fin : DUSK (pas de utility pour dusk)
             new_label->duration = horizon - new_label->start_time - 1; // set to 0 before
@@ -753,7 +862,7 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
         new_label->delta_soc = 0;
         new_label->charge_cost_at_activity_start = current_label->current_charge_cost;
         // STEP 1b: Calculate charging for first interval of new activity (if charging)
-        //  This must happen BEFORE calling update_utility so that utility calculation has access to charging data
+        //  This must happen before calling update_utility so that utility calculation has access to charging data
         //  need to adapt this to deal with the situation where
         //  charging will be completed BEFORE activity is over
         //  - so there will be time spent idle at the charger
@@ -933,7 +1042,8 @@ int DSSR(Label *L)
 /* Dynamic Programming */
 void DP()
 {
-    // printf("\n Dynamic Programming");
+    draw_utility_error_terms_for_dp();
+
     if (bucket == NULL)
     {
         printf(" BUCKET IS NULL %d", 0);
