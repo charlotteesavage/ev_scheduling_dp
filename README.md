@@ -18,12 +18,7 @@ It:
 
 Run it with:
 ```bash
-./py testing_latest/testing_check.py
-```
-
-There is also a Makefile helper:
-```bash
-make py-testing-check
+python3 testing_latest/testing_check.py
 ```
 
 ## Unit/validation tests
@@ -32,10 +27,9 @@ Validation tests live in:
 
 Run them with:
 ```bash
-./py testing_latest/validation_tests/run_validation_tests.py
+python3 testing_latest/validation_tests/run_validation_tests.py
 ```
 
 ## Notes
-- `environment.yml` contains the conda environment used by the `./py` helper script (defaults to the `dp_new` env; override with `DP_CONDA_ENV`).
+- `environment.yml` contains the conda environment used by the Makefile helper (`make py-testing-check`) (defaults to the `dp_new` env; override with `DP_CONDA_ENV`).
 - The C-only build (executable) is available via `make`, but most workflows use the Python scripts in `testing_latest/`.
-

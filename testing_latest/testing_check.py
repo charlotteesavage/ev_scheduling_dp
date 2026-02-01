@@ -299,12 +299,6 @@ def initialize_utility():
 
     # we don't have a delivery parameter coeff in the paper, and the given data doesn't have a leisure activity, so can change these as desired
 
-    # asc=[0, 10.6, 0, 11.3, 17.4, 12, 16.1, 6.76, 0],
-    # early=[0, -1.37, 0, -2.51, -2.56, -0.031, -1.73, -2.55, 0],
-    # late=[0, -0.79, 0, -0.993, -1.54, -1.58, -3.42, -0.578, 0],
-    # long=[0, -0.201, 0, -0.133, -0.0783, -0.209, -0.597, -0.0267, 0],
-    # short=[0, -4.78, 0, 0.528, -0.783, -0.00764, -5.63, 0.134, 0],
-
     # have made "business" coeffs the same as "errands" coeffs
     # have used Leisure params from the paper in 6: depot, cos not sure what else to do there
 
@@ -314,14 +308,6 @@ def initialize_utility():
     long = [0, -0.201, -0.597, -0.133, -0.0783, -0.209, -0.597, -0.0267, -0.24]
     short = [0, -4.78, -5.63, 0.528, -0.783, -0.00764, -5.63, 0.134, -0.61]
     # short = [0, -4.78, -5.63, -0.528, -0.783, -0.00764, -5.63, -0.134, 0]
-
-    # In the paper formulation, timing/duration deviation parameters are penalties (non-positive).
-    # Some legacy vectors had positive entries, which turns "penalties" into large rewards for
-    # deviating (e.g., leaving very early when des_duration is large), causing exploding utilities.
-    early = [min(0.0, float(x)) for x in early]
-    late = [min(0.0, float(x)) for x in late]
-    long = [min(0.0, float(x)) for x in long]
-    short = [min(0.0, float(x)) for x in short]
 
     return {"asc": asc, "early": early, "late": late, "long": long, "short": short}
 
