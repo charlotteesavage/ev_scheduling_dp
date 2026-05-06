@@ -352,7 +352,7 @@ def main():
     os.chdir(script_dir)
 
     activities_file = (
-        "person_ending_1263/activities_with_service_station_and_work_charge_free.csv"
+        "person_ending_1259/activities_with_charge_at_shop_and_service_station.csv"
     )
     num_runs = 100
     output_dir = "charging_participation_results"

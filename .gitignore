@@ -57,6 +57,11 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
+testing_latest/sheffield_activities_prepared.csv
+
+#Agent md files:
+CLAUDE.md
+AGENTS.md
 
 .cache/
 .matplotlib_cache/
@@ -67,3 +72,7 @@ dylan_data/
 not_in_play/
 tests/
 new_offcuts/
+Sheffield_Project_model_input/
+testing_latest/population_results
+testing_latest/optimal_schedules
+testing_latest/charging_participation_results
