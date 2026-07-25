@@ -75,6 +75,8 @@ help:
 	@echo "  make test     - Build and run test suite"
 	@echo "  make test-build - Build tests only (don't run)"
 	@echo "  make test-clean - Clean test artifacts"
+	@echo "  make build-so - Compile shared library for Python (testing_latest/scheduling.so)"
+	@echo "  make validate - Run validation test suite"
 	@echo "  make help     - Show this help message"
 
 # Test targets (delegates to tests/Makefile)
@@ -97,5 +99,16 @@ PY := conda run -n $(PY_ENV) python
 py-testing-check:
 	$(PY) testing_latest/testing_check.py
 
+# Build the shared library used by Python (faster than the full executable build)
+build-so:
+	@echo "Building shared library..."
+	gcc -m64 -O3 -shared -fPIC -Iinclude -o testing_latest/scheduling.so \
+	    src/scheduling.c src/utils.c src/main.c -lm
+	@echo "Built: testing_latest/scheduling.so"
+
+# Run the validation test suite
+validate:
+	$(PY) testing_latest/validation_tests/run_validation_tests.py
+
 # Phony targets (not actual files)
-.PHONY: all clean rebuild run debug help test test-build test-clean py-testing-check
+.PHONY: all clean rebuild run debug help test test-build test-clean py-testing-check build-so validate

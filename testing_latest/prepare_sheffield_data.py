@@ -255,6 +255,38 @@ def add_dawn_dusk(activities, persons):
     return pd.concat([dawn_df, activities, dusk_df], ignore_index=True)
 
 
+# ── Non-charging duplicate rows ───────────────────────────────────────────────
+
+
+def duplicate_for_choice(df):
+    """
+    For every activity row that has charger access (charge_mode != 0), emit a
+    second row representing the driver's option to NOT charge there.
+
+    Rules:
+    - Only duplicate rows with _sentinel == "activity" (excludes dawn/dusk).
+    - Skip service stations (is_service_station == 1) — they always charge.
+    - The charging variant keeps its original charge_mode / is_charging.
+    - The non-charging variant gets charge_mode=0, is_charging=0.
+    - A _is_noncharge_copy column (0 or 1) is added so assign_ids can place
+      the charging row immediately before its non-charging twin.
+    """
+    df = df.copy()
+    df["_is_noncharge_copy"] = 0
+
+    mask = (
+        (df["_sentinel"] == "activity")
+        & (df["charge_mode"] != 0)
+        & (df["is_service_station"] != 1)
+    )
+    dupes = df[mask].copy()
+    dupes["charge_mode"] = 0
+    dupes["is_charging"] = 0
+    dupes["_is_noncharge_copy"] = 1
+
+    return pd.concat([df, dupes], ignore_index=True)
+
+
 # ── Sequential id assignment ──────────────────────────────────────────────────
 
 
@@ -262,14 +294,22 @@ def assign_ids(df):
     """
     Assign per-person sequential integer ids:
       0 = dawn, 1…N = activities (ordered by activity_idx), N+1 = dusk.
+
+    When duplicate_for_choice has been applied, the charging variant of each
+    activity immediately precedes its non-charging twin (_is_noncharge_copy
+    distinguishes them within the same activity_idx).
     """
     df = df.copy()
     sentinel_order = df["_sentinel"].map({"dawn": 0, "dusk": 2}).fillna(1)
     act_idx = df.get("activity_idx", pd.Series(0, index=df.index)).fillna(0)
-    df["_sort"] = sentinel_order * 10_000 + act_idx
+    noncharge = df.get("_is_noncharge_copy", pd.Series(0, index=df.index)).fillna(0)
+    df["_sort"] = sentinel_order * 10_000 + act_idx + noncharge * 0.5
     df = df.sort_values(["pid", "_sort"])
     df["id"] = df.groupby("pid").cumcount()
-    df = df.drop(columns=["_sort", "_sentinel", "activity_idx"], errors="ignore")
+    df = df.drop(
+        columns=["_sort", "_sentinel", "activity_idx", "_is_noncharge_copy"],
+        errors="ignore",
+    )
     return df
 
 
@@ -305,6 +345,9 @@ def main():
 
     # Dawn / dusk sentinels
     acts = add_dawn_dusk(acts, persons)
+
+    # Duplicate chargeable activities to give DP the option not to charge
+    acts = duplicate_for_choice(acts)
 
     # Sequential ids
     acts = assign_ids(acts)
