@@ -81,6 +81,7 @@ Activity._fields_ = [
     ("charge_mode", c_int),
     ("is_charging", c_int),
     ("is_service_station", c_int),
+    ("base_id", c_int),
 ]
 
 
@@ -247,6 +248,15 @@ def initialise_and_personalise_activities(df):
             int(row["is_service_station"])
             if not pd.isna(row["is_service_station"])
             else 0
+        )
+
+        # Twin rows (charge / no-charge variants of one activity) share a base_id so
+        # they also share their participation/start/duration/travel error draws.
+        # Absent the column, every row is its own base.
+        activities_array[act_id].base_id = (
+            int(row["base_id"])
+            if "base_id" in row.index and not pd.isna(row["base_id"])
+            else act_id
         )
 
         # Memory (will be initialized by C code)

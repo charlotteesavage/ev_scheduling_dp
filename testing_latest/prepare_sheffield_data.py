@@ -19,6 +19,8 @@ Output schema (one row per person-activity, including dawn and dusk sentinels):
   charge_mode, is_charging, is_service_station
 """
 
+import argparse
+import hashlib
 import time
 from pathlib import Path
 
@@ -28,8 +30,52 @@ from scipy.spatial import KDTree
 
 # ── Configuration ────────────────────────────────────────────────────────────
 CHARGER_THRESHOLD_M = 250  # activities within this distance of a charger get charging
-HOME_CHARGE_MODE = 1  # 1 = slow (7 kW) home charging for all persons
+HOME_CHARGE_MODE = 1  # 1 = slow (7 kW) home charging where available
 HORIZON = 288  # 5-min intervals in 24 hours
+
+# Share of the population with a home charger (1.0 = universal, the old behaviour).
+# Home charging is a property of the dwelling, so it is assigned per PERSON and is
+# constant across all of that person's home activities.
+HOME_CHARGING_SHARE = 1.0
+HOME_CHARGING_SEED = 20260726
+
+
+def stable_unit_interval(keys, seed):
+    """
+    Map each key to a reproducible float in [0, 1).
+
+    Python's built-in hash() is salted per process (PYTHONHASHSEED), so it gives a
+    different answer on every run and must not be used for anything that needs to
+    hold still between scenario runs. A counterfactual is only interpretable if the
+    same person gets the same draw in baseline and intervention, so the mapping has
+    to be a pure function of (key, seed).
+    """
+    out = np.empty(len(keys), dtype=np.float64)
+    salt = str(seed).encode()
+    for i, k in enumerate(keys):
+        digest = hashlib.blake2b(salt + b"|" + str(k).encode(), digest_size=8).digest()
+        out[i] = int.from_bytes(digest, "big") / 2**64
+    return out
+
+
+def assign_home_charging(pids, share, seed):
+    """
+    Decide which persons have a home charger.
+
+    Returns a DataFrame [pid, has_home_charger]. Assignment is per person and
+    reproducible, so scenarios that vary `share` are nested: lowering the share only
+    ever removes chargers from people who had one at the higher share, it never
+    reshuffles who has one. That keeps the difference between two runs attributable
+    to the lever rather than to a new random draw.
+    """
+    pids = pd.Index(pids).unique()
+    if share >= 1.0:
+        flags = np.ones(len(pids), dtype=int)
+    elif share <= 0.0:
+        flags = np.zeros(len(pids), dtype=int)
+    else:
+        flags = (stable_unit_interval(pids, seed) < share).astype(int)
+    return pd.DataFrame({"pid": pids, "has_home_charger": flags})
 
 REPO_ROOT = Path(__file__).parent.parent
 DATA_ROOT = REPO_ROOT / "Sheffield_Project_model_input"
@@ -147,10 +193,13 @@ def build_charger_tree(path):
     return tree, df["power_range_max"].values
 
 
-def assign_charging(activities, tree, powers, threshold_m):
+def assign_charging(activities, tree, powers, threshold_m, home_chargers=None):
     """
     Spatial join: set charge_mode and is_charging for each unique (x, y).
-    Home activities always get HOME_CHARGE_MODE regardless of charger proximity.
+
+    Home activities get HOME_CHARGE_MODE regardless of charger proximity, but only
+    for persons who have a home charger. `home_chargers` is a DataFrame
+    [pid, has_home_charger]; passing None keeps the old universal behaviour.
     """
     unique = activities[["x", "y"]].drop_duplicates().copy()
     coords = unique[["x", "y"]].values
@@ -170,6 +219,10 @@ def assign_charging(activities, tree, powers, threshold_m):
     result = activities.merge(unique, on=["x", "y"], how="left")
 
     home_mask = result["act_type"] == "home"
+    if home_chargers is not None:
+        result = result.merge(home_chargers, on="pid", how="left")
+        result["has_home_charger"] = result["has_home_charger"].fillna(0).astype(int)
+        home_mask &= result["has_home_charger"] == 1
     result.loc[home_mask, "charge_mode"] = HOME_CHARGE_MODE
     result.loc[home_mask, "is_charging"] = 1
 
@@ -217,8 +270,15 @@ def add_dawn_dusk(activities, persons):
     (id=last, latest_start=HORIZON-2) per person, using home coordinates
     from the persons table.
 
-    Dawn has no charging (initial SoC already captures overnight charging).
-    Dusk has home slow charging (driver plugs in on return).
+    Neither sentinel charges. Overnight charging is represented by the initial SoC
+    draw in initialise_SOC() on the C side, so charging at dusk as well would both
+    double-count it and — because duplicate_for_choice skips sentinels — force it on
+    every person, which is exactly the exogenous rule this model exists to replace.
+
+    If dusk charging is wanted later it has to become a genuine choice (a no-charge
+    twin), and that is not a data-only change: main.c terminates the DP at
+    bucket[horizon-1][max_num_activities-1], so a second dusk row would be
+    unreachable as a terminal state until that is generalised.
     """
     home = persons[persons["pid"].isin(activities["pid"].unique())][
         ["pid", "x", "y"]
@@ -235,16 +295,14 @@ def add_dawn_dusk(activities, persons):
         out["_sentinel"] = "dawn" if is_dawn else "dusk"
         out["min_duration"] = 1
         out["max_duration"] = HORIZON - 2
+        out["charge_mode"] = 0
+        out["is_charging"] = 0
         if is_dawn:
             out["earliest_start"] = 0
             out["latest_start"] = 0
-            out["charge_mode"] = 0
-            out["is_charging"] = 0
         else:
             out["earliest_start"] = 0
             out["latest_start"] = HORIZON - 2
-            out["charge_mode"] = HOME_CHARGE_MODE
-            out["is_charging"] = 1
         return out
 
     dawn_df = _sentinel(home, is_dawn=True)
@@ -306,6 +364,17 @@ def assign_ids(df):
     df["_sort"] = sentinel_order * 10_000 + act_idx + noncharge * 0.5
     df = df.sort_values(["pid", "_sort"])
     df["id"] = df.groupby("pid").cumcount()
+
+    # base_id ties a no-charge twin back to its charging original. The sort above
+    # places the charging variant immediately before its twin, so the original is
+    # always at id - 1. Rows without a twin are their own base.
+    # The C layer keys the participation/start/duration/travel error terms on
+    # base_id, so twins share one draw instead of getting two independent ones.
+    noncharge_sorted = (
+        df.get("_is_noncharge_copy", pd.Series(0, index=df.index)).fillna(0).astype(int)
+    )
+    df["base_id"] = df["id"] - noncharge_sorted
+
     df = df.drop(
         columns=["_sort", "_sentinel", "activity_idx", "_is_noncharge_copy"],
         errors="ignore",
@@ -316,7 +385,36 @@ def assign_ids(df):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
-def main():
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[1] if __doc__ else None)
+    p.add_argument(
+        "--home-charging-share", type=float, default=HOME_CHARGING_SHARE,
+        metavar="P",
+        help="Fraction of persons with a home charger, 0.0-1.0 (default: %(default)s). "
+             "Assignment is per person and nested across shares, so scenarios differ "
+             "only by the lever.",
+    )
+    p.add_argument(
+        "--home-charging-seed", type=int, default=HOME_CHARGING_SEED, metavar="N",
+        help="Seed for home-charger assignment (default: %(default)s). Hold this "
+             "fixed across scenarios you intend to compare.",
+    )
+    p.add_argument(
+        "--home-chargers-file", type=Path, default=None, metavar="CSV",
+        help="Optional CSV with columns [pid, has_home_charger] giving an explicit "
+             "per-person assignment (e.g. derived from dwelling type). Overrides "
+             "--home-charging-share.",
+    )
+    p.add_argument(
+        "--out-stem", type=Path, default=OUT_STEM, metavar="PATH",
+        help="Output path without extension (default: %(default)s). Give each "
+             "scenario its own stem so runs do not overwrite each other.",
+    )
+    return p.parse_args()
+
+
+def main(args=None):
+    args = args or parse_args()
     t0 = time.time()
 
     # Charger index (built once, used for all unique locations)
@@ -337,8 +435,31 @@ def main():
     acts = acts[acts["pid"].isin(common)]
     persons = persons[persons["pid"].isin(common)]
 
+    # Who has a home charger
+    if args.home_chargers_file is not None:
+        home_chargers = pd.read_csv(args.home_chargers_file)
+        missing = {"pid", "has_home_charger"} - set(home_chargers.columns)
+        if missing:
+            raise SystemExit(
+                f"{args.home_chargers_file} is missing column(s): {sorted(missing)}"
+            )
+        home_chargers = home_chargers[["pid", "has_home_charger"]]
+        src = str(args.home_chargers_file)
+    else:
+        if not 0.0 <= args.home_charging_share <= 1.0:
+            raise SystemExit("--home-charging-share must be between 0.0 and 1.0")
+        home_chargers = assign_home_charging(
+            sorted(common), args.home_charging_share, args.home_charging_seed
+        )
+        src = f"share={args.home_charging_share} seed={args.home_charging_seed}"
+    n_home = int(home_chargers["has_home_charger"].sum())
+    print(
+        f"Home chargers: {n_home:,} / {len(home_chargers):,} persons "
+        f"({n_home / max(len(home_chargers), 1):.1%})  [{src}]"
+    )
+
     # Charging assignment (spatial join per unique location)
-    acts = assign_charging(acts, tree, powers, CHARGER_THRESHOLD_M)
+    acts = assign_charging(acts, tree, powers, CHARGER_THRESHOLD_M, home_chargers)
 
     # Desired start time / duration
     acts = join_desired_times(acts, persons)
@@ -351,6 +472,14 @@ def main():
 
     # Sequential ids
     acts = assign_ids(acts)
+
+    # Re-attach per-person home-charger status. The dawn/dusk sentinels are built
+    # from the persons table so they never carried it, and it is worth keeping in
+    # the output as an analysis dimension (charging demand split by home access).
+    acts = acts.drop(columns=["has_home_charger"], errors="ignore").merge(
+        home_chargers, on="pid", how="left"
+    )
+    acts["has_home_charger"] = acts["has_home_charger"].fillna(0).astype(int)
 
     # Final column selection (matches testing_check.py expected schema)
     output_cols = [
@@ -369,6 +498,8 @@ def main():
         "charge_mode",
         "is_charging",
         "is_service_station",
+        "base_id",
+        "has_home_charger",
     ]
     acts = acts[output_cols]
 
@@ -385,19 +516,24 @@ def main():
         "charge_mode",
         "is_charging",
         "is_service_station",
+        "base_id",
+        "has_home_charger",
     ]
     acts[int_cols] = acts[int_cols].astype(int)
 
-    # Save
-    OUT_STEM.parent.mkdir(parents=True, exist_ok=True)
+    # Save. Build the filename by appending rather than Path.with_suffix(), which
+    # would treat the ".6" in a stem like "…_home0.6" as an extension and overwrite
+    # a different scenario's output.
+    out_stem = Path(args.out_stem)
+    out_stem.parent.mkdir(parents=True, exist_ok=True)
     try:
-        out_path = OUT_STEM.with_suffix(".parquet")
+        out_path = out_stem.with_name(out_stem.name + ".parquet")
         acts.to_parquet(out_path, index=False)
         print(
             f"Saved {len(acts):,} rows ({acts['pid'].nunique():,} persons) → {out_path}"
         )
     except ImportError:
-        out_path = OUT_STEM.with_suffix(".csv")
+        out_path = out_stem.with_name(out_stem.name + ".csv")
         acts.to_csv(out_path, index=False)
         print(f"pyarrow not found; saved as CSV → {out_path}")
         print("  Install with: pip install pyarrow   (much faster reads)")

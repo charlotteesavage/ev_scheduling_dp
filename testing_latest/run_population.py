@@ -17,7 +17,9 @@ Output (in testing_latest/population_results/):
 """
 
 import argparse
+import hashlib
 import multiprocessing as mp
+import subprocess
 import sys
 import time
 from ctypes import CDLL, POINTER, c_char, c_double, c_int
@@ -93,6 +95,44 @@ def worker_init(lib_path: str, data_path: str, params: dict):
 
 # ── Per-person DP run ─────────────────────────────────────────────────────────
 
+def default_workers() -> int:
+    """
+    Sensible default worker count.
+
+    Not cpu_count(): on hybrid CPUs (Apple silicon P+E cores) filling every logical
+    core is measurably *slower* than using only the performance cores, because the
+    DP is CPU-bound and the slow cores hold up each chunk. Measured on this repo,
+    1000 persons: 4 workers = 40.6 ms/person, 8 workers = 59.4 ms/person.
+    Falls back to cpu_count() wherever the performance-core count is unavailable.
+    """
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.run(
+                ["sysctl", "-n", "hw.perflevel0.logicalcpu"],
+                capture_output=True, text=True, timeout=5, check=True,
+            )
+            n = int(out.stdout.strip())
+            if n > 0:
+                return n
+        except (subprocess.SubprocessError, ValueError, OSError):
+            pass
+    return mp.cpu_count()
+
+
+def person_seed(pid, salt: int = 0) -> int:
+    """
+    Stable per-person RNG seed in the c_int range.
+
+    Pure function of (pid, salt), unlike hash(), so a person draws the same initial
+    SoC and the same utility errors in every run. Pass a different salt to draw a
+    fresh replication of the whole population while keeping it reproducible.
+    """
+    digest = hashlib.blake2b(
+        f"{salt}|{pid}".encode(), digest_size=8
+    ).digest()
+    return int.from_bytes(digest, "big") & 0x7FFF_FFFF
+
+
 def _make_activities_array(df: pd.DataFrame):
     """Build a ctypes Activity array from a person's prepared DataFrame."""
     n   = len(df)
@@ -112,6 +152,9 @@ def _make_activities_array(df: pd.DataFrame):
         arr[aid].charge_mode      = int(row["charge_mode"])      if pd.notna(row["charge_mode"])      else 0
         arr[aid].is_charging      = int(row["is_charging"])      if pd.notna(row["is_charging"])      else 0
         arr[aid].is_service_station = int(row["is_service_station"]) if pd.notna(row["is_service_station"]) else 0
+        # Charge/no-charge twins share a base_id so they share their activity-level
+        # error draws (see Activity.base_id in include/scheduling.h).
+        arr[aid].base_id          = int(row["base_id"]) if "base_id" in row.index and pd.notna(row["base_id"]) else aid
         arr[aid].memory           = None
     return arr, n
 
@@ -128,8 +171,12 @@ def run_one_person(pid: str) -> dict:
 
         _lib.set_activities(arr, n_acts)
 
-        # Deterministic seed derived from pid so results are reproducible
-        seed = abs(hash(pid)) & 0x7FFF_FFFF
+        # Deterministic seed derived from pid so results are reproducible.
+        # Must NOT use the built-in hash(): Python salts string hashing per process
+        # (PYTHONHASHSEED), so it returns a different value on every run. That would
+        # give each person a fresh initial SoC and fresh utility errors each time,
+        # and two scenario runs would differ by noise as well as by the intervention.
+        seed = person_seed(pid)
         _lib.set_random_seed(c_int(seed))
 
         _lib.main(0, None)
@@ -163,10 +210,17 @@ def run_one_person(pid: str) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Population-scale EV scheduling DP")
-    parser.add_argument("--workers", type=int, default=4,
-                        help="Worker processes (default: cpu_count)")
-    parser.add_argument("--limit",   type=int, default=50,
-                        help="Max persons to run — useful for quick tests")
+    # Both of these default to None so the documented behaviour ("all persons, all
+    # CPU cores") is what actually happens. They previously defaulted to 4 and 50,
+    # which made `--workers`' own `or mp.cpu_count()` fallback dead code and meant a
+    # bare `python run_population.py` quietly ran 50 people and looked like a full
+    # population run.
+    parser.add_argument("--workers", type=int, default=None,
+                        help="Worker processes (default: performance-core count, "
+                             "which beats using every logical core on hybrid CPUs)")
+    parser.add_argument("--limit",   type=int, default=None,
+                        help="Max persons to run — useful for quick tests "
+                             "(default: all persons)")
     parser.add_argument("--data",    type=Path, default=DEFAULT_DATA,
                         help="Path to prepared activities file (.parquet or .csv)")
     args = parser.parse_args()
@@ -183,7 +237,7 @@ def main():
 
     lib_path  = compile_code()
     params    = initialize_utility()
-    n_workers = args.workers or mp.cpu_count()
+    n_workers = args.workers or default_workers()
 
     # Read just the pid column to get the full list cheaply
     try:

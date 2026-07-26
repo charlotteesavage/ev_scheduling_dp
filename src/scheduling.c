@@ -292,6 +292,20 @@ void set_activities(Activity *activities_data, int pynum_activities)
 {
     activities = activities_data;
     max_num_activities = pynum_activities;
+
+    // Normalise base_id. Only dawn (id 0) may legitimately have base_id 0, because
+    // duplicate_for_choice never duplicates the dawn/dusk sentinels. So a zero (or
+    // out-of-range) base_id on any other row means the caller did not populate the
+    // field — most likely a Python ctypes mirror that predates it. Fall back to id
+    // rather than silently sending every activity to error-term slot 0.
+    for (int i = 0; i < max_num_activities; i++)
+    {
+        int b = activities[i].base_id;
+        if (b < 0 || b >= max_num_activities || (b == 0 && activities[i].id != 0))
+        {
+            activities[i].base_id = activities[i].id;
+        }
+    }
 }
 
 /* Allocates memory for and initializes a new Label with the specified Activity */
@@ -711,10 +725,14 @@ static double update_utility(Label *L)
     L->utility += travel_time_penalty * travel_time(previous_act, act);
 
     // Error terms (drawn once per DP run). If std dev is 0, these arrays are NULL and add 0.
+    // Keyed on base_id, not id: charge/no-charge twins describe the same activity
+    // and the same physical trip, so they must share these draws. Keying on id
+    // would give a duplicated row a second independent draw, inflating how often
+    // it is chosen (E[max(e1,e2)] > E[e]).
     if (eps_participation != NULL)
     {
-        L->utility += eps_participation[act->id];
-        L->utility += eps_travel[previous_act->id * eps_n + act->id];
+        L->utility += eps_participation[act->base_id];
+        L->utility += eps_travel[previous_act->base_id * eps_n + act->base_id];
     }
 
     // service station has no duration penalties - its only penalties come from cost of charge
@@ -729,7 +747,7 @@ static double update_utility(Label *L)
                       fmax(0, previous_L->duration - previous_act->des_duration);
         if (eps_duration != NULL)
         {
-            L->utility += eps_duration[previous_act->id];
+            L->utility += eps_duration[previous_act->base_id];
         }
     }
 
@@ -742,7 +760,7 @@ static double update_utility(Label *L)
                       fmax(0, L->start_time - act->des_start_time);
         if (eps_start_time != NULL)
         {
-            L->utility += eps_start_time[act->id];
+            L->utility += eps_start_time[act->base_id];
         }
     }
 
@@ -783,7 +801,9 @@ static double update_utility(Label *L)
             L->utility += beta_charge_cost * previous_L->current_charge_cost;
         }
 
-        // Charging-specific error term (drawn once per DP run).
+        // Charging-specific error term (drawn once per DP run). This one stays keyed
+        // on id, not base_id: it is the noise on the charging decision itself, which
+        // is exactly what should differ between a row and its no-charge twin.
         if (eps_charging != NULL)
         {
             int mode = previous_act->charge_mode;

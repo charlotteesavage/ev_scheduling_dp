@@ -126,6 +126,78 @@ def check_no_repeats(schedule, activities):
     return True
 
 
+def _visited_ids(lib, activities, start_battery, sigma, seed, params):
+    """Run the DP quietly and return the set of activity ids on the best path."""
+    activities_array, num_activities = initialise_and_personalise_activities(activities)
+    lib.set_fixed_initial_soc(c_double(start_battery))
+    lib.set_utility_error_std_dev(c_double(sigma))
+    lib.set_random_seed(c_int(seed))
+
+    result = run_dp(lib, activities_array, num_activities, params)
+    if result is None:
+        lib.free_bucket()
+        return None
+    best_label, _ = result
+    ids, node = set(), best_label
+    while node:
+        ids.add(node.contents.act_id)
+        node = node.contents.previous
+    lib.free_bucket()
+    return ids
+
+
+def run_twin_error_sharing_test(lib, n_seeds=120):
+    """
+    Duplicating an activity into charge/no-charge twins must not change how often
+    that activity is chosen. Twins share a base_id, so they share their
+    participation/start/duration/travel error draws; without that sharing the pair
+    gets two independent draws and wins more often than the single row purely
+    because E[max(e1, e2)] > E[e].
+
+    Both fixtures here have charging switched off on every row, so the twins are
+    utility-identical and any difference in visit rate is the artefact alone.
+    """
+    base = Path(__file__).parent
+    single_path = base / "twin_sharing_single.csv"
+    twin_path = base / "twin_sharing_twins.csv"
+    if not single_path.exists() or not twin_path.exists():
+        return "SKIP"
+
+    single = pd.read_csv(single_path)
+    twins = pd.read_csv(twin_path)
+    params = initialize_utility()
+    # Make the shop marginal so the visit decision is actually noise-sensitive;
+    # the calibrated short/long terms would otherwise make it unconditional.
+    # At this ASC the single-row fixture is visited on roughly half of the seeds,
+    # which is where the duplication artefact shows up most strongly. If the shop
+    # is always or never visited the comparison below passes vacuously.
+    params["asc"][3] = 2.0
+    params["short"][3] = 0.0
+    params["long"][3] = 0.0
+    params["early"][3] = 0.0
+    params["late"][3] = 0.0
+
+    n_single = n_twin = 0
+    for seed in range(n_seeds):
+        s = _visited_ids(lib, single, 0.3, 1.0, seed, params)
+        t = _visited_ids(lib, twins, 0.3, 1.0, seed, params)
+        if s and 1 in s:
+            n_single += 1
+        if t and (1 in t or 2 in t):
+            n_twin += 1
+        # Twins share a group, so elementarity must stop both appearing at once.
+        if t and 1 in t and 2 in t:
+            return "FAIL"
+
+    # Guard against a vacuous pass: if utility parameters drift so the shop is
+    # always or never chosen, both counts match trivially and the test proves
+    # nothing. Fail loudly instead of going quietly green.
+    if n_single in (0, n_seeds):
+        return "FAIL"
+
+    return "PASS" if n_single == n_twin else "FAIL"
+
+
 def run_test(lib, csv_file, start_battery):
     csv_path = Path(__file__).parent / csv_file
     if not csv_path.exists():
@@ -215,6 +287,15 @@ def main():
 
     results.append(run_test(lib, "horizon_constraint.csv", 0.5))
     lib.free_bucket()
+
+    # Charge/no-charge twin rows (see duplicate_for_choice in prepare_sheffield_data.py).
+    # check_no_repeats doubles as the elementarity guard here: both twins share a
+    # group, so a schedule containing both would fail.
+    results.append(run_test(lib, "charge_choice.csv", 0.3))
+    lib.free_bucket()
+
+    # base_id error-draw sharing (frees its own buckets internally).
+    results.append(run_twin_error_sharing_test(lib))
 
     passed = results.count("PASS")
     failed = results.count("FAIL")

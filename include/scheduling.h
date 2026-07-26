@@ -40,6 +40,14 @@ typedef struct Activity
 
     int is_service_station; // 1 for yes, 0 for no
 
+    // Identifies the underlying real-world activity when a row has been duplicated
+    // to make charging a choice (see duplicate_for_choice in prepare_sheffield_data.py).
+    // Twin rows share a base_id; a row with no twin has base_id == id.
+    // Error terms that belong to the activity itself (participation, start time,
+    // duration, travel) are keyed on base_id so that duplicating a row does not
+    // give it a second independent draw. Charging-specific noise stays keyed on id.
+    int base_id;
+
 } Activity;
 
 // decision variable for: charging, which charge mode, need a duplication of a for every kind of charging you might do
