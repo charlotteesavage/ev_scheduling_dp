@@ -51,6 +51,7 @@ def run_single_simulation(activities_file, output_file, seed):
     script = textwrap.dedent(
         f"""
         import os
+        import random
         import sys
         from ctypes import CDLL, POINTER, c_char, c_double, c_int
 
@@ -103,9 +104,12 @@ def run_single_simulation(activities_file, output_file, seed):
             utility_error_sigma = 1.0
             lib.set_utility_error_std_dev(c_double(utility_error_sigma))
             lib.set_random_seed(c_int({seed}))
-            lib.clear_fixed_initial_soc()
-            # Force a fixed initial SOC across all runs
-            # lib.set_fixed_initial_soc(c_double(0.3))
+
+            # Initial SoC varies per run. This used to be drawn C-side; it is drawn
+            # here now, from the run seed, so the value is known to Python and the
+            # C code keeps a single source of initial SoC.
+            initial_soc = min(1.0, max(0.0, random.Random({seed}).gauss(0.40, 0.10)))
+            lib.set_fixed_initial_soc(c_double(initial_soc))
 
             activities_array, max_num_activities = initialise_and_personalise_activities(
                 activities_df
@@ -119,8 +123,8 @@ def run_single_simulation(activities_file, output_file, seed):
                     best_label = result
 
                 schedule_df = extract_schedule(best_label, activities_array, activities_df)
-                # Record the actual initial SOC used by C for this run
-                schedule_df["initial_soc"] = c_double.in_dll(lib, "initial_soc").value
+                # Record the initial SOC used for this run
+                schedule_df["initial_soc"] = initial_soc
                 schedule_df.to_csv("{output_file}", index=False)
 
             lib.free_bucket()

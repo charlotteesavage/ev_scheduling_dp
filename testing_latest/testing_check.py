@@ -142,6 +142,7 @@ def compile_code():
 
     # Check if recompilation is needed
     needs_recompile = False
+    # needs_recompile = True
     if not os.path.exists(output_lib):
         needs_recompile = True
         print("No existing compiled library found")
@@ -471,8 +472,6 @@ def main():
     lib.set_random_seed.restype = None
     lib.set_fixed_initial_soc.argtypes = [c_double]
     lib.set_fixed_initial_soc.restype = None
-    lib.clear_fixed_initial_soc.argtypes = []
-    lib.clear_fixed_initial_soc.restype = None
     lib.set_utility_error_std_dev.argtypes = [c_double]
     lib.set_utility_error_std_dev.restype = None
 
@@ -519,15 +518,15 @@ def main():
 
     # Run DP
     # Keep SOC fixed, but use the seed for utility error terms.
-    # fixed_soc = 0.80
+    fixed_soc = 0.30
     utility_error_sigma = 1.0  # set 0.0 to disable error terms
 
-    # lib.set_fixed_initial_soc(c_double(fixed_soc))
+    lib.set_fixed_initial_soc(c_double(fixed_soc))
     lib.set_utility_error_std_dev(c_double(utility_error_sigma))
 
     utility_seed = int(time.time())
     lib.set_random_seed(c_int(utility_seed))
-    # print(f"Fixed initial SOC: {fixed_soc:.2%}")
+    print(f"Fixed initial SOC: {fixed_soc:.2%}")
     print(f"Utility error sigma: {utility_error_sigma}")
     print(f"Utility error seed: {utility_seed}")
     best_label, total_time = run_dp(lib, activities_array, max_num_activities, params)

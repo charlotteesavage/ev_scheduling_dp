@@ -62,8 +62,6 @@ def multi_run_test(seed: int | None = None):
     lib.free_bucket.restype = None
     lib.set_fixed_initial_soc.argtypes = [c_double]
     lib.set_fixed_initial_soc.restype = None
-    lib.clear_fixed_initial_soc.argtypes = []
-    lib.clear_fixed_initial_soc.restype = None
     lib.set_random_seed.argtypes = [c_int]
     lib.set_random_seed.restype = None
 
