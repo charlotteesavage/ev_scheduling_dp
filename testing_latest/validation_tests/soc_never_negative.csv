@@ -4,3 +4,4 @@ id,act_type,x,y,group,earliest_start,latest_start,min_duration,max_duration,des_
 2,work,5000.0,0.0,2,50,100,20,40,80,30,0,0,0
 3,shop,10000.0,0.0,4,50,120,10,30,100,15,0,0,0
 4,other,15000.0,0.0,8,50,140,10,20,110,10,0,0,0
+5,home,0.0,0.0,1,0,286,1,286,0,0,0,0,0
