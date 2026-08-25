@@ -41,6 +41,7 @@ obj/
 # Output and data files
 output/
 *.json
+*.parquet
 
 # Jupyter Notebooks (if you add any)
 .ipynb_checkpoints/
