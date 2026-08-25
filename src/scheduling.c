@@ -389,17 +389,15 @@ static void get_charge_rate_and_price(Activity *a, double result[2])
         charge_price = 0;
         break;
 
-    case 1: // slow charging
+    case 1: // public slow charging (7 kW post)
+        // Billed at the public AC tariff WHEREVER it occurs, including a public post
+        // within walking distance of the home. Private home chargers are mode 7, so
+        // this no longer has to infer the tariff from the activity group -- which was
+        // wrong for the 22,490 non-home 7 kW rows that used to bill at the domestic
+        // rate, and would have been wrong again for public posts near the home once
+        // home_charging_share drops below 1.
         charge_rate = slow_charge_rate;
-        charge_price = home_slow_charge_price;
-        // if (a->group == 0)
-        // {
-        //     charge_price = home_slow_charge_price;
-        // }
-        // if (a->group != 0)
-        // {
-        //     charge_price = AC_charge_price;
-        // }
+        charge_price = AC_charge_price;
         break;
 
     case 2: // fast charging
@@ -425,6 +423,15 @@ static void get_charge_rate_and_price(Activity *a, double result[2])
     case 6: // free rapid charging
         charge_rate = rapid_charge_rate;
         charge_price = 0.0;
+        break;
+
+    case 7: // PRIVATE home slow charging (7 kW), billed at the domestic tariff.
+        // Set by HOME_CHARGE_MODE in prepare_sheffield_data.py, and only for persons
+        // whose has_home_charger flag is set. Distinct from mode 1 so that "I own a
+        // charger" and "there is a public post down the street" are separable in the
+        // data rather than sharing one number.
+        charge_rate = slow_charge_rate;
+        charge_price = home_slow_charge_price;
         break;
     }
     result[0] = charge_rate;

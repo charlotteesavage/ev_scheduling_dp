@@ -36,7 +36,11 @@ CHARGER_THRESHOLD_M = 500  # activities within this distance of a charger get ch
 # charging participation to 1.6% of persons. Participation scales near-proportionally
 # with coverage (~0.14 x coverage), so this constant sets the scale of every
 # intervention result and should be cited, and swept, rather than assumed.
-HOME_CHARGE_MODE = 1  # 1 = slow (7 kW) home charging where available
+HOME_CHARGE_MODE = 7  # 7 = PRIVATE home slow charging (7 kW), domestic tariff.
+# Deliberately not 1: mode 1 is a public 7 kW post and bills at the public AC
+# tariff. Keeping them distinct means a home row can say whether the person owns
+# the charger or merely lives near a public one -- which matters as soon as
+# --home-charging-share drops below 1.
 HORIZON = 288  # 5-min intervals in 24 hours
 
 # Share of the population with a home charger (1.0 = universal, the old behaviour).
