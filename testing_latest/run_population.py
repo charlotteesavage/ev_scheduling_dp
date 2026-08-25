@@ -19,6 +19,7 @@ Output (in testing_latest/population_results/):
 import argparse
 import hashlib
 import multiprocessing as mp
+import random
 import subprocess
 import sys
 import time
@@ -44,6 +45,7 @@ RESULTS_DIR  = REPO_ROOT / "testing_latest" / "population_results"
 # of the worker process so the .so is not reloaded per person.
 _lib      = None
 _pid_data = None   # dict: pid (str) → per-person DataFrame
+_soc_mix  = None   # SocMixture: per-person initial SoC draw
 
 
 def _setup_lib(lib):
@@ -62,15 +64,19 @@ def _setup_lib(lib):
     lib.set_random_seed.restype  = None
     lib.set_utility_error_std_dev.argtypes = [c_double]
     lib.set_utility_error_std_dev.restype  = None
+    lib.set_fixed_initial_soc.argtypes = [c_double]
+    lib.set_fixed_initial_soc.restype  = None
 
 
-def worker_init(lib_path: str, data_path: str, params: dict):
+def worker_init(lib_path: str, data_path: str, params: dict, soc_mix=None):
     """
     Called once per worker process by multiprocessing.Pool.
     Loads the shared library, sets constant parameters, and indexes the
     prepared activity data so per-person lookups are O(1).
     """
-    global _lib, _pid_data
+    global _lib, _pid_data, _soc_mix
+
+    _soc_mix = soc_mix
 
     _lib = CDLL(lib_path)
     _setup_lib(_lib)
@@ -133,6 +139,39 @@ def person_seed(pid, salt: int = 0) -> int:
     return int.from_bytes(digest, "big") & 0x7FFF_FFFF
 
 
+# ── Initial state of charge ───────────────────────────────────────────────────
+# Overnight charging is represented as an initial condition rather than a forced
+# dusk activity (dusk charging was removed — see add_dawn_dusk in
+# prepare_sheffield_data.py). Someone with a home charger starts the day near full;
+# everyone else starts on whatever they had left. That makes home-charger access
+# matter at both ends of the day, so the --home-charging-share lever moves both how
+# much people can top up *and* what they wake up with.
+
+SOC_SALT = 1  # keeps the SoC stream independent of the C-side error-term seed
+
+
+class SocMixture:
+    """Per-person initial SoC, conditioned on home-charger access."""
+
+    def __init__(self, home_mean, home_std, nohome_mean, nohome_std):
+        self.home_mean = home_mean
+        self.home_std = home_std
+        self.nohome_mean = nohome_mean
+        self.nohome_std = nohome_std
+
+    def draw(self, pid, has_home_charger: bool) -> float:
+        """
+        Reproducible draw in [0, 1]. Clamping (rather than resampling) is deliberate:
+        it piles a little mass at exactly 1.0 for home chargers, which is the right
+        shape — plenty of people do charge to full overnight — and it keeps every
+        draw inside the [0, 1] range the C code assumes.
+        """
+        mean, std = ((self.home_mean, self.home_std) if has_home_charger
+                     else (self.nohome_mean, self.nohome_std))
+        rng = random.Random(person_seed(pid, salt=SOC_SALT))
+        return min(1.0, max(0.0, rng.gauss(mean, std)))
+
+
 def _make_activities_array(df: pd.DataFrame):
     """Build a ctypes Activity array from a person's prepared DataFrame."""
     n   = len(df)
@@ -179,6 +218,14 @@ def run_one_person(pid: str) -> dict:
         seed = person_seed(pid)
         _lib.set_random_seed(c_int(seed))
 
+        # Initial SoC. set_fixed_initial_soc() is sticky — once set it stays on for
+        # the whole worker process — so it must be set for EVERY person, or one
+        # person's value silently leaks into the next. main() has already verified
+        # the has_home_charger column exists, so this is unconditional.
+        has_hc = bool(df["has_home_charger"].iloc[0])
+        initial_soc = _soc_mix.draw(pid, has_hc)
+        _lib.set_fixed_initial_soc(c_double(initial_soc))
+
         _lib.main(0, None)
         best = _lib.get_final_schedule()
 
@@ -199,6 +246,8 @@ def run_one_person(pid: str) -> dict:
             "n_acts_out":     len(schedule),
             "final_utility":  float(schedule["utility"].iloc[-1]),
             "final_soc":      float(schedule["soc_end"].iloc[-1]),
+            "initial_soc":    initial_soc,
+            "has_home_charger": has_hc,
             "time_ms":        (time.perf_counter() - t0) * 1e3,
         }
     except Exception as exc:
@@ -206,7 +255,15 @@ def run_one_person(pid: str) -> dict:
                 "time_ms": (time.perf_counter() - t0) * 1e3}
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+def _column_names(path: Path) -> list:
+    """Column names for a parquet/CSV file, without reading the data itself."""
+    if path.suffix == ".parquet":
+        import pyarrow.parquet as pq
+        return list(pq.read_schema(path).names)
+    return list(pd.read_csv(path, nrows=0).columns)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Population-scale EV scheduling DP")
@@ -223,6 +280,20 @@ def main():
                              "(default: all persons)")
     parser.add_argument("--data",    type=Path, default=DEFAULT_DATA,
                         help="Path to prepared activities file (.parquet or .csv)")
+    # Initial-SoC mixture. Overnight charging is an initial condition here, not an
+    # activity, so home-charger owners wake up near full and everyone else does not.
+    parser.add_argument("--home-soc-mean", type=float, default=0.95, metavar="M",
+                        help="Mean initial SoC for persons WITH a home charger "
+                             "(default: %(default)s)")
+    parser.add_argument("--home-soc-std", type=float, default=0.05, metavar="S",
+                        help="Std dev of initial SoC with a home charger "
+                             "(default: %(default)s)")
+    parser.add_argument("--nohome-soc-mean", type=float, default=0.40, metavar="M",
+                        help="Mean initial SoC for persons WITHOUT a home charger "
+                             "(default: %(default)s)")
+    parser.add_argument("--nohome-soc-std", type=float, default=0.10, metavar="S",
+                        help="Std dev of initial SoC without a home charger "
+                             "(default: %(default)s)")
     args = parser.parse_args()
 
     # Resolve .parquet/.csv if stem was given
@@ -234,6 +305,18 @@ def main():
         else:
             sys.exit(f"Prepared data not found: {data_path}\n"
                      "Run prepare_sheffield_data.py first.")
+
+    # Initial SoC is drawn conditional on home-charger access, so a missing
+    # column would silently simulate a different population. Check once here,
+    # before any worker starts — a check inside run_one_person() would be
+    # swallowed by its `except Exception` and reported as a per-person failure.
+    if "has_home_charger" not in _column_names(data_path):
+        raise ValueError(
+            f"{data_path.name} has no 'has_home_charger' column. Initial SoC is "
+            "drawn conditional on home-charger access, so this run would "
+            "silently simulate a different population. "
+            "Re-run prepare_sheffield_data.py to add it."
+        )
 
     lib_path  = compile_code()
     params    = initialize_utility()
@@ -249,7 +332,15 @@ def main():
     if args.limit:
         pids = pids[: args.limit]
 
+    soc_mix = SocMixture(
+        args.home_soc_mean, args.home_soc_std,
+        args.nohome_soc_mean, args.nohome_soc_std,
+    )
+
     print(f"Persons: {len(pids):,}  |  Workers: {n_workers}  |  Data: {data_path.name}")
+    print(f"Initial SoC: home charger N({soc_mix.home_mean}, {soc_mix.home_std}) | "
+              f"no home charger N({soc_mix.nohome_mean}, {soc_mix.nohome_std}) "
+              f"[clamped to 0-1]")
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -267,7 +358,7 @@ def main():
     with mp.Pool(
         processes=n_workers,
         initializer=worker_init,
-        initargs=(lib_path, str(data_path), params),
+        initargs=(lib_path, str(data_path), params, soc_mix),
     ) as pool:
         for result in pool.imap_unordered(run_one_person, pids, chunksize=50):
             log_rows.append({
@@ -277,6 +368,8 @@ def main():
                 "n_acts_out":     result.get("n_acts_out"),
                 "final_utility":  result.get("final_utility"),
                 "final_soc":      result.get("final_soc"),
+                "initial_soc":    result.get("initial_soc"),
+                "has_home_charger": result.get("has_home_charger"),
                 "time_ms":        result.get("time_ms"),
                 "error":          result.get("error", ""),
             })
@@ -316,6 +409,12 @@ def main():
         print(f"\nMedian time per person : {ok['time_ms'].median():.1f} ms")
         print(f"Mean final SOC         : {ok['final_soc'].mean():.2%}")
         print(f"Mean final utility     : {ok['final_utility'].mean():.2f}")
+        if ok["initial_soc"].notna().any():
+            print(f"Mean initial SOC       : {ok['initial_soc'].mean():.2%}")
+            if ok["has_home_charger"].notna().any():
+                by = ok.groupby("has_home_charger")[["initial_soc", "final_soc"]].mean()
+                print("Mean SOC by home charger access:")
+                print(by.to_string(float_format=lambda v: f"{v:.2%}"))
     if n_ok < len(pids):
         failures = log_df[~log_df["success"]]
         print(f"\nFailure reasons:\n{failures['error'].value_counts().to_string()}")
