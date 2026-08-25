@@ -993,8 +993,15 @@ int DSSR(Label *L)
 
     while (p1 != NULL && cycle == 0)
     { // iterates through the labels starting from L in the reverse direction until it reaches the beginning
-        while (p1 != NULL && (p1->act_id == max_num_activities - 1 || p1->act_id == max_num_activities - 2))
-        { // skips labels that correspond to the last activity // group == 0 ?
+        while (p1 != NULL && p1->act_id == max_num_activities - 1)
+        { // Skip the dusk sentinel, which can never anchor a cycle.
+          // The `|| act_id == max_num_activities - 2` clause that used to be here was
+          // an index-based guess at "the last activity is home". It is wrong whenever
+          // id n-2 is a real activity -- 10.6% of the Sheffield population -- and it
+          // exempted that activity from cycle detection entirely, since an activity
+          // that is never p1 is never the anchor of a group-repeat check. The
+          // `p1->act->group != 0` test below already excludes home/dawn/dusk on the
+          // basis of what the activity IS, which is the correct criterion.
             p1 = p1->previous;
         }
         Label *p2 = p1;
