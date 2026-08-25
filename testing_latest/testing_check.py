@@ -394,21 +394,25 @@ def extract_schedule(best_label, activities_array, activities_df=None):
         path_to_root.append(current)
         current = current.contents.previous
 
+    # Activity-type lookup, built once per call. This was previously a boolean-mask
+    # scan of activities_df *per label on the path*, which dominated per-person
+    # runtime (~26 ms of ~31 ms measured over the Sheffield population). setdefault
+    # keeps first-match-wins, matching the .iloc[0] it replaces.
+    act_types = {}
+    if activities_df is not None and "act_type" in activities_df.columns:
+        for aid, atype in zip(activities_df["id"], activities_df["act_type"]):
+            act_types.setdefault(int(aid), atype)
+
     # Process labels and group by unique (act_id, start_time)
     schedule_dict = {}
     for label_pointer in reversed(path_to_root):
         label = label_pointer.contents
         activity = activities_array[label.act_id]
 
-        # Get activity type name from original dataframe if available
-        if activities_df is not None and "act_type" in activities_df.columns:
-            act_type_row = activities_df[activities_df["id"] == label.act_id]
-            if not act_type_row.empty:
-                act_type = act_type_row.iloc[0]["act_type"]
-            else:
-                act_type = "home" if activity.group == 0 else f"group_{activity.group}"
-        else:
-            act_type = "home" if activity.group == 0 else f"group_{activity.group}"
+        act_type = act_types.get(
+            label.act_id,
+            "home" if activity.group == 0 else f"group_{activity.group}",
+        )
 
         unique_key = (label.act_id, label.start_time)
         data = {
