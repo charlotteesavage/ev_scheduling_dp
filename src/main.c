@@ -17,6 +17,17 @@ int main(int argc, char *argv[])
     clock_t start_time, end_time;
     start_time = clock();
 
+    // This entry point is shared: the Python drivers call it through ctypes after
+    // set_activities(), while bin/scheduling reaches it with nothing configured.
+    // Without this guard the latter segfaults on activities[0] below.
+    if (activities == NULL || max_num_activities <= 0)
+    {
+        fprintf(stderr,
+                "No activities configured. This entry point must be driven via\n"
+                "set_activities() from Python -- see testing_latest/run_population.py.\n");
+        return 1;
+    }
+
     // it's populating or updating the "bucket" with feasible solutions or labels
     // bucket = pour chaque time horizon et pour chaque activite, voici un schedule ?
     create_bucket(horizon, max_num_activities);
