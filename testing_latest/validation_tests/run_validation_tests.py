@@ -87,6 +87,42 @@ def check_durations(schedule, activities):
     return True
 
 
+def check_des_duration(schedule, activities):
+    """
+    Behavioural check: a scheduled duration should land nearer its DESIRED value
+    than its floor. check_durations() above only asserts the duration is legal
+    (inside [min, max]); this asserts it is in the right PLACE inside that range.
+
+    Comparative rather than absolute on purpose -- no tolerance to tune, and it
+    stays valid when des_duration changes. It is deliberately lenient about mild
+    deviation; it is hunting the "pinned to min_duration" failure mode.
+
+    Only meaningful on a fixture with enough schedule slack for the activity to
+    actually reach its desired duration. Without slack this measures feasibility,
+    not preference.
+    """
+    checked = 0
+    for i, row in schedule.iterrows():
+        if i == len(schedule) - 1:
+            continue  # the final activity's duration is forced to fill the horizon
+        input_act = activities[activities['id'] == row['act_id']]
+        if len(input_act) == 0:
+            continue
+        input_act = input_act.iloc[0]
+        # No duration term applies to home (group 1 in the CSV) or service
+        # stations -- see update_utility() in src/scheduling.c.
+        if input_act['group'] == 1 or input_act['is_service_station'] == 1:
+            continue
+        checked += 1
+        to_desired = abs(row['duration'] - input_act['des_duration'])
+        to_floor = abs(row['duration'] - input_act['min_duration'])
+        if to_desired >= to_floor:
+            return False
+    # A fixture that schedules nothing must not pass silently -- that is how
+    # duration_bounds.csv sat green while testing nothing at all.
+    return checked > 0
+
+
 def check_horizon(schedule):
     # start_time is in hours, duration is in 5-minute intervals
     for _, row in schedule.iterrows():
@@ -198,6 +234,40 @@ def run_twin_error_sharing_test(lib, n_seeds=120):
     return "PASS" if n_single == n_twin else "FAIL"
 
 
+def run_des_duration_test(lib, csv_file="des_duration.csv", start_battery=0.5):
+    """
+    Behavioural realism: scheduled durations should land near their desired value.
+
+    Kept out of run_test() deliberately. run_test() applies every structural check
+    to every fixture; this one is a statement about preferences, and the other
+    fixtures were not built with the schedule slack needed to satisfy it. Running
+    it against its own purpose-built fixture keeps the structural suite readable.
+    """
+    csv_path = Path(__file__).parent / csv_file
+    if not csv_path.exists():
+        return "SKIP"
+
+    activities = pd.read_csv(csv_path)
+    activities_array, num_activities = initialise_and_personalise_activities(activities)
+    params = initialize_utility()
+
+    lib.set_fixed_initial_soc(c_double(start_battery))
+    lib.set_utility_error_std_dev(c_double(0.0))   # deterministic
+    lib.set_random_seed(c_int(42))
+
+    result = run_dp(lib, activities_array, num_activities, params)
+    if result is None:
+        lib.free_bucket()
+        return "FAIL"
+
+    best_label, _ = result
+    schedule = extract_schedule(best_label, activities_array, activities)
+    schedule = schedule.sort_values('start_time').reset_index(drop=True)
+    verdict = "PASS" if check_des_duration(schedule, activities) else "FAIL"
+    lib.free_bucket()
+    return verdict
+
+
 def run_test(lib, csv_file, start_battery):
     csv_path = Path(__file__).parent / csv_file
     if not csv_path.exists():
@@ -287,6 +357,10 @@ def main():
 
     results.append(run_test(lib, "horizon_constraint.csv", 0.5))
     lib.free_bucket()
+
+    # Behavioural: durations should sit near des_duration, not pinned to min.
+    # Runs on its own fixture via its own runner -- see run_des_duration_test.
+    results.append(run_des_duration_test(lib))
 
     # Charge/no-charge twin rows (see duplicate_for_choice in prepare_sheffield_data.py).
     # check_no_repeats doubles as the elementarity guard here: both twins share a
