@@ -29,7 +29,13 @@ import pandas as pd
 from scipy.spatial import KDTree
 
 # ── Configuration ────────────────────────────────────────────────────────────
-CHARGER_THRESHOLD_M = 250  # activities within this distance of a charger get charging
+CHARGER_THRESHOLD_M = 500  # activities within this distance of a charger get charging
+# 500 m is the baseline walking distance from a charger to an activity. It was 250 m,
+# which sat far below the median distance to the nearest charger (1,326 m) and left
+# only 4.3% of activity locations with any charging access — suppressing baseline
+# charging participation to 1.6% of persons. Participation scales near-proportionally
+# with coverage (~0.14 x coverage), so this constant sets the scale of every
+# intervention result and should be cited, and swept, rather than assumed.
 HOME_CHARGE_MODE = 1  # 1 = slow (7 kW) home charging where available
 HORIZON = 288  # 5-min intervals in 24 hours
 
@@ -271,7 +277,7 @@ def add_dawn_dusk(activities, persons):
     from the persons table.
 
     Neither sentinel charges. Overnight charging is represented by the initial SoC
-    draw in initialise_SOC() on the C side, so charging at dusk as well would both
+    draw in SocMixture (run_population.py), so charging at dusk as well would both
     double-count it and — because duplicate_for_choice skips sentinels — force it on
     every person, which is exactly the exogenous rule this model exists to replace.
 
@@ -406,6 +412,12 @@ def parse_args():
              "--home-charging-share.",
     )
     p.add_argument(
+        "--charger-threshold", type=float, default=CHARGER_THRESHOLD_M, metavar="M",
+        help="An activity location within this many metres of a charger gets "
+             "charging access (default: %(default)s). This is the public-charging "
+             "coverage lever; it does not affect home charging.",
+    )
+    p.add_argument(
         "--out-stem", type=Path, default=OUT_STEM, metavar="PATH",
         help="Output path without extension (default: %(default)s). Give each "
              "scenario its own stem so runs do not overwrite each other.",
@@ -457,9 +469,10 @@ def main(args=None):
         f"Home chargers: {n_home:,} / {len(home_chargers):,} persons "
         f"({n_home / max(len(home_chargers), 1):.1%})  [{src}]"
     )
+    print(f"Charger proximity threshold: {args.charger_threshold:g} m")
 
     # Charging assignment (spatial join per unique location)
-    acts = assign_charging(acts, tree, powers, CHARGER_THRESHOLD_M, home_chargers)
+    acts = assign_charging(acts, tree, powers, args.charger_threshold, home_chargers)
 
     # Desired start time / duration
     acts = join_desired_times(acts, persons)
