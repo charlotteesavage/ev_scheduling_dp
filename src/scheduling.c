@@ -32,12 +32,14 @@ double energy_consumption_rate = 0.2; // kwh_per_km
 
 // Initial SOC parameters for normal distribution
 unsigned int seed = 42;            // Default seed for reproducibility (can be changed via set_random_seed())
-double initial_soc_mean = 0.40;    // 30% average starting SOC
-double initial_soc_std_dev = 0.1;  // 10% standard deviation
+
 double initial_soc; // Will be set using normal_random() in create_label()
 
-static int fixed_initial_soc_enabled = 0;
-static double fixed_initial_soc_value = 0.30;
+// Initial SoC is drawn per person on the Python side (SocMixture in
+// run_population.py) and pushed down before every run. There is deliberately no
+// default value: a silent fallback would mean simulating a population nobody chose.
+static int initial_soc_set = 0;
+static double initial_soc_value;
 
 static double utility_error_std_dev = 1.0;
 static int rng_seeded = 0;
@@ -210,23 +212,6 @@ void initialize_charge_rates(void) // initialise these rates per eqn (39) in pap
     rapid_charge_rate = (rapid_charge_power / battery_capacity) * fraction_of_hours_per_interval;
 }
 
-double initialise_SOC(unsigned int seed_val)
-{
-    if (!rng_seeded)
-    {
-        seed_random(seed_val);
-        rng_seeded = 1;
-    }
-    double output;
-    output = normal_random(initial_soc_mean, initial_soc_std_dev);
-
-    // // Clamp to valid SOC range [0.0, 1.0]
-    // if (output < 0.0) output = 0.0;
-    // if (output > 1.0) output = 1.0;
-
-    return output;
-}
-
 void set_random_seed(unsigned int seed_value)
 {
     seed = seed_value;
@@ -238,19 +223,14 @@ void set_random_seed(unsigned int seed_value)
 
 void set_fixed_initial_soc(double soc)
 {
-    fixed_initial_soc_enabled = 1;
-    fixed_initial_soc_value = soc;
+    initial_soc_set = 1;
+    initial_soc_value = soc;
 
     // Clamp to valid SOC range [0.0, 1.0]
-    if (fixed_initial_soc_value < 0.0)
-        fixed_initial_soc_value = 0.0;
-    if (fixed_initial_soc_value > 1.0)
-        fixed_initial_soc_value = 1.0;
-}
-
-void clear_fixed_initial_soc(void)
-{
-    fixed_initial_soc_enabled = 0;
+    if (initial_soc_value < 0.0)
+        initial_soc_value = 0.0;
+    if (initial_soc_value > 1.0)
+        initial_soc_value = 1.0;
 }
 
 void set_utility_error_std_dev(double std_dev)
@@ -326,22 +306,25 @@ static Label *create_label(Activity *aa)
     L->mem->next = NULL;
     L->mem->previous = NULL;
 
-    // Ensure the RNG is seeded before any random draws (initial SOC and/or utility error term).
+    // Ensure the RNG is seeded before the utility error draws. main() is shared
+    // between the Python drivers (which always call set_random_seed first) and the
+    // standalone binary (which never does), so this latch cannot move into main().
     if (!rng_seeded)
     {
         seed_random(seed);
         rng_seeded = 1;
     }
 
-    // Initialize SOC
-    if (fixed_initial_soc_enabled)
+    // Initialize SOC. Aborting is deliberate: there is no sensible default, and a
+    // silent one would produce a full run of plausible-looking but unasked-for results.
+    if (!initial_soc_set)
     {
-        initial_soc = fixed_initial_soc_value;
+        fprintf(stderr, "FATAL: set_fixed_initial_soc() must be called before "
+                        "main()/DP(). There is no default initial SoC.\n");
+        exit(EXIT_FAILURE);
     }
-    else
-    {
-        initial_soc = initialise_SOC(seed);
-    }
+    initial_soc = initial_soc_value;
+
     L->soc_at_activity_start = initial_soc; // battery state of charge at the start of activity 𝑎
     L->current_soc = initial_soc;
     L->charge_duration = 0;
