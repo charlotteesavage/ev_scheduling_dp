@@ -14,7 +14,12 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
 RESULTS_DIR = Path(__file__).parent / "population_results"
-SCHED_PATH  = RESULTS_DIR / "schedules.csv"
+# Prefer the parquet the runner writes when pyarrow is available; fall back to CSV.
+# Hardcoding schedules.csv meant a stale CSV from an earlier run could be plotted
+# silently while the current run wrote schedules.parquet next to it.
+_PARQUET    = RESULTS_DIR / "schedules.parquet"
+_CSV        = RESULTS_DIR / "schedules.csv"
+SCHED_PATH  = _PARQUET if _PARQUET.exists() else _CSV
 
 # Consistent colour palette for activity types
 ACT_COLOURS = {
@@ -39,7 +44,7 @@ ACT_COLOURS = {
 
 
 def load_schedules():
-    df = pd.read_csv(SCHED_PATH)
+    df = pd.read_parquet(SCHED_PATH) if SCHED_PATH.suffix == ".parquet" else pd.read_csv(SCHED_PATH)
     df["end_h"] = df["start_time"] + df["duration"] * 5 / 60
     return df
 
