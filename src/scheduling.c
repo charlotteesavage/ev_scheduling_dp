@@ -937,8 +937,13 @@ static Label *update_label_from_activity(Label *current_label, Activity *a)
             new_label->delta_soc = fmin(soc_full - new_label->current_soc, charge_rate);
             new_label->current_soc += new_label->delta_soc;
 
-            // Calculate charging cost for this interval
-            double tou_factor = get_tou_factor(new_label->start_time); // needs to be at the start of the interval
+            // Calculate charging cost for this interval.
+            // This step bills the interval [current_label->time, current_label->time + 1),
+            // so the band is the one in force at ITS start -- not at the activity's start.
+            // Using new_label->start_time billed a whole session at whatever band applied
+            // when it began, so a session crossing a boundary was priced wrong throughout.
+            // double tou_factor = get_tou_factor(new_label ->start_time) // old formulation
+            double tou_factor = get_tou_factor(current_label->time);
             double energy_charged_kwh = new_label->delta_soc * battery_capacity;
             double interval_cost = charge_price * tou_factor * energy_charged_kwh;
             new_label->current_charge_cost += interval_cost;
