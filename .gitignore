@@ -77,3 +77,6 @@ Sheffield_Project_model_input/
 testing_latest/population_results
 testing_latest/optimal_schedules
 testing_latest/charging_participation_results
+
+# Road routing artefacts (rebuildable; see AGENTS.md "Travel distance and time")
+testing_latest/skim_cache/

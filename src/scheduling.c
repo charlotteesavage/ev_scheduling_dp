@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include <time.h>
 #include <stdbool.h>
@@ -343,9 +344,63 @@ static Label *create_label(Activity *aa)
 ///////////////////// HELPER FUNCTIONS /////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static double distance_x(Activity *a1, Activity *a2) // this will change as we will just reference a skim matrix
+// ── Travel skim ───────────────────────────────────────────────────────────────
+// Optional per-person origin-destination matrices, set from Python via
+// set_travel_skim() before each person's DP run. Both are n x n, indexed by
+// ACTIVITY id (not location id), so twin rows sharing a location simply carry the
+// same values. n is the person's activity count, so these are tiny -- a few KB.
+//
+// When no skim is set (skim_n == 0) both functions fall back to straight-line
+// distance and a single flat speed, which is what the model did before skims
+// existed. The validation fixtures rely on that fallback.
+static double *skim_distance_m = NULL;   // metres, road distance
+static double *skim_time_min = NULL;     // minutes, road travel time
+static int skim_n = 0;
+
+void set_travel_skim(double *distance_m, double *time_min, int n)
 {
-    // Distance in metres
+    free(skim_distance_m);
+    free(skim_time_min);
+    skim_distance_m = NULL;
+    skim_time_min = NULL;
+    skim_n = 0;
+
+    if (distance_m == NULL || time_min == NULL || n <= 0)
+    {
+        return; // treated as "no skim" -- callers fall back to Euclidean
+    }
+
+    // Copy rather than borrow: the caller's numpy/ctypes buffer may be freed or
+    // reused for the next person while the DP is still running.
+    size_t cells = (size_t)n * (size_t)n;
+    skim_distance_m = (double *)malloc(cells * sizeof(double));
+    skim_time_min = (double *)malloc(cells * sizeof(double));
+    if (skim_distance_m == NULL || skim_time_min == NULL)
+    {
+        free(skim_distance_m);
+        free(skim_time_min);
+        skim_distance_m = NULL;
+        skim_time_min = NULL;
+        return;
+    }
+    memcpy(skim_distance_m, distance_m, cells * sizeof(double));
+    memcpy(skim_time_min, time_min, cells * sizeof(double));
+    skim_n = n;
+}
+
+void clear_travel_skim(void)
+{
+    set_travel_skim(NULL, NULL, 0);
+}
+
+static double distance_x(Activity *a1, Activity *a2)
+{
+    // Distance in metres. Road distance from the skim when one is loaded,
+    // otherwise straight-line between the coordinates.
+    if (skim_n > 0 && a1->id >= 0 && a1->id < skim_n && a2->id >= 0 && a2->id < skim_n)
+    {
+        return skim_distance_m[(size_t)a1->id * (size_t)skim_n + (size_t)a2->id];
+    }
     double dx = (double)(a2->x - a1->x);
     double dy = (double)(a2->y - a1->y);
     double dist = sqrt(dx * dx + dy * dy);
@@ -354,8 +409,18 @@ static double distance_x(Activity *a1, Activity *a2) // this will change as we w
 
 static int travel_time(Activity *a1, Activity *a2) // returns travel time in no of intervals
 {
-    double dist = distance_x(a1, a2); // this will change too
-    double minutes = dist / speed;    // speed is metres per minute
+    double minutes;
+    if (skim_n > 0 && a1->id >= 0 && a1->id < skim_n && a2->id >= 0 && a2->id < skim_n)
+    {
+        // Road travel time, which is NOT distance/speed: a motorway leg and an
+        // urban leg of the same length take different times.
+        minutes = skim_time_min[(size_t)a1->id * (size_t)skim_n + (size_t)a2->id];
+    }
+    else
+    {
+        double dist = distance_x(a1, a2);
+        minutes = dist / speed; // speed is metres per minute
+    }
     int intervals = (int)ceil(minutes / (double)time_interval);
     if (intervals < 0)
     {

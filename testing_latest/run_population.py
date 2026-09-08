@@ -46,6 +46,7 @@ RESULTS_DIR  = REPO_ROOT / "testing_latest" / "population_results"
 _lib      = None
 _pid_data = None   # dict: pid (str) → per-person DataFrame
 _soc_mix  = None   # SocMixture: per-person initial SoC draw
+_skim     = None   # TravelSkim, or None for straight-line distance
 
 
 def _setup_lib(lib):
@@ -66,17 +67,32 @@ def _setup_lib(lib):
     lib.set_utility_error_std_dev.restype  = None
     lib.set_fixed_initial_soc.argtypes = [c_double]
     lib.set_fixed_initial_soc.restype  = None
+    lib.set_travel_skim.argtypes = [POINTER(c_double), POINTER(c_double), c_int]
+    lib.set_travel_skim.restype  = None
+    lib.clear_travel_skim.argtypes = []
+    lib.clear_travel_skim.restype  = None
 
 
-def worker_init(lib_path: str, data_path: str, params: dict, soc_mix=None):
+def worker_init(lib_path: str, data_path: str, params: dict, soc_mix=None,
+                skim_backend: str = None):
     """
     Called once per worker process by multiprocessing.Pool.
     Loads the shared library, sets constant parameters, and indexes the
     prepared activity data so per-person lookups are O(1).
     """
-    global _lib, _pid_data, _soc_mix
+    global _lib, _pid_data, _soc_mix, _skim
 
     _soc_mix = soc_mix
+
+    # Each worker gets its own TravelSkim. They share the on-disk pair cache for
+    # reads, but each keeps its own in-memory dict — workers are separate
+    # processes, so there is nothing to synchronise and nothing to race on.
+    # Autosave is off here: several processes writing one pickle would corrupt it.
+    # main() warms the cache before forking, so misses in the workers are rare.
+    _skim = None
+    if skim_backend and skim_backend != "none":
+        from travel_skim import TravelSkim
+        _skim = TravelSkim.from_name(skim_backend, autosave_every=0)
 
     _lib = CDLL(lib_path)
     _setup_lib(_lib)
@@ -210,6 +226,26 @@ def run_one_person(pid: str) -> dict:
 
         _lib.set_activities(arr, n_acts)
 
+        # Travel skim for this person. Like set_fixed_initial_soc(), this is
+        # sticky inside a worker process, so it must be set (or cleared) for
+        # EVERY person or the previous person's matrix silently leaks into the
+        # next one — and the two people have unrelated locations, so the result
+        # would be wrong without being obviously wrong.
+        routed = approximated = 0
+        if _skim is not None:
+            before_hits = getattr(_skim.backend, "hits", 0)
+            before_misses = getattr(_skim.backend, "misses", 0)
+            dist_m, time_min = _skim.matrices(df)
+            routed = getattr(_skim.backend, "hits", 0) - before_hits
+            approximated = getattr(_skim.backend, "misses", 0) - before_misses
+            _lib.set_travel_skim(
+                dist_m.ctypes.data_as(POINTER(c_double)),
+                time_min.ctypes.data_as(POINTER(c_double)),
+                c_int(dist_m.shape[0]),
+            )
+        else:
+            _lib.clear_travel_skim()
+
         # Deterministic seed derived from pid so results are reproducible.
         # Must NOT use the built-in hash(): Python salts string hashing per process
         # (PYTHONHASHSEED), so it returns a different value on every run. That would
@@ -248,6 +284,8 @@ def run_one_person(pid: str) -> dict:
             "final_soc":      float(schedule["soc_end"].iloc[-1]),
             "initial_soc":    initial_soc,
             "has_home_charger": has_hc,
+            "legs_routed":    routed,
+            "legs_approx":    approximated,
             "time_ms":        (time.perf_counter() - t0) * 1e3,
         }
     except Exception as exc:
@@ -294,6 +332,18 @@ def main():
     parser.add_argument("--nohome-soc-std", type=float, default=0.10, metavar="S",
                         help="Std dev of initial SoC without a home charger "
                              "(default: %(default)s)")
+    parser.add_argument("--travel", choices=["none", "euclidean", "detour", "route"],
+                        default="none", metavar="BACKEND",
+                        help="Travel distance/time source (default: %(default)s). "
+                             "'route' is the real one: road distance and road time "
+                             "looked up in the table built by build_road_graph.py and "
+                             "build_route_table.py. 'none' and 'euclidean' both give "
+                             "straight-line distance at a flat speed — 'none' does it "
+                             "inside the C, 'euclidean' routes it through the skim so "
+                             "the plumbing can be checked. 'detour' scales "
+                             "straight-line distance by a measured, distance-banded "
+                             "factor, and is what 'route' falls back to for pairs "
+                             "outside the road graph.")
     args = parser.parse_args()
 
     # Resolve .parquet/.csv if stem was given
@@ -342,6 +392,42 @@ def main():
               f"no home charger N({soc_mix.nohome_mean}, {soc_mix.nohome_std}) "
               f"[clamped to 0-1]")
 
+    # Warm the travel-skim cache in THIS process, before forking. Workers get a
+    # copy of it for free and can then run almost entirely on cache hits. Doing it
+    # after the fork would mean every worker routing the same shared legs
+    # separately, and only one of them could safely write the cache back.
+    if args.travel == "route":
+        # Nothing to warm: build_route_table.py already did the routing, and the
+        # workers each memory-map the same table.
+        from travel_skim import TravelSkim, ROUTE_TABLE
+        if not ROUTE_TABLE.exists():
+            raise SystemExit(
+                f"--travel route needs {ROUTE_TABLE}, which does not exist.\n"
+                "Build it with:\n"
+                "    python3 testing_latest/build_road_graph.py\n"
+                "    python3 testing_latest/build_route_table.py")
+        print("Travel: real road distance and time from the route table")
+    elif args.travel != "none":
+        from travel_skim import TravelSkim
+        warm = TravelSkim.from_name(args.travel)
+        print(f"Travel: {args.travel} backend, warming pair cache for {len(pids):,} persons...")
+        t_warm = time.time()
+        # Only the columns matrices() needs — the full frame is large and the
+        # workers load it themselves anyway.
+        cols = ["pid", "id", "x", "y"]
+        if data_path.suffix == ".parquet":
+            df_for_warm = pd.read_parquet(data_path, columns=cols)
+        else:
+            df_for_warm = pd.read_csv(data_path, usecols=cols, low_memory=False)
+        subset = df_for_warm[df_for_warm["pid"].isin(set(pids))]
+        for _, person in subset.groupby("pid"):
+            warm.matrices(person.reset_index(drop=True))
+        warm.save()
+        print(f"        {warm.hits + warm.misses:,} pair lookups "
+              f"({warm.misses:,} routed, {warm.hits:,} cached) in {time.time() - t_warm:.1f}s")
+    else:
+        print("Travel: straight-line distance at a flat speed (no skim)")
+
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     schedules  = []
@@ -358,7 +444,7 @@ def main():
     with mp.Pool(
         processes=n_workers,
         initializer=worker_init,
-        initargs=(lib_path, str(data_path), params, soc_mix),
+        initargs=(lib_path, str(data_path), params, soc_mix, args.travel),
     ) as pool:
         for result in pool.imap_unordered(run_one_person, pids, chunksize=50):
             log_rows.append({
@@ -370,6 +456,8 @@ def main():
                 "final_soc":      result.get("final_soc"),
                 "initial_soc":    result.get("initial_soc"),
                 "has_home_charger": result.get("has_home_charger"),
+                "legs_routed":    result.get("legs_routed"),
+                "legs_approx":    result.get("legs_approx"),
                 "time_ms":        result.get("time_ms"),
                 "error":          result.get("error", ""),
             })
@@ -415,6 +503,15 @@ def main():
                 by = ok.groupby("has_home_charger")[["initial_soc", "final_soc"]].mean()
                 print("Mean SOC by home charger access:")
                 print(by.to_string(float_format=lambda v: f"{v:.2%}"))
+        if args.travel != "none" and ok["legs_routed"].notna().any():
+            routed = float(ok["legs_routed"].sum())
+            approx = float(ok["legs_approx"].sum())
+            total = routed + approx
+            if total > 0:
+                print(f"\nTravel legs            : {total:,.0f} "
+                      f"({routed / total:.1%} from the {args.travel} source, "
+                      f"{approx / total:.1%} approximated)")
+
     if n_ok < len(pids):
         failures = log_df[~log_df["success"]]
         print(f"\nFailure reasons:\n{failures['error'].value_counts().to_string()}")

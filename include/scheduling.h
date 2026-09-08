@@ -179,6 +179,12 @@ void set_general_parameters(int pyhorizon, double pyspeed, double pytravel_time_
 
 );
 void set_activities(Activity *activities_data, int pynum_activities);
+
+// Per-person travel skim (road distance in metres, road time in minutes), both
+// n x n indexed by activity id. Pass NULL/0 or call clear_travel_skim() to fall
+// back to straight-line distance and a flat speed.
+void set_travel_skim(double *distance_m, double *time_min, int n);
+void clear_travel_skim(void);
 void set_fixed_initial_soc(double soc);
 void set_random_seed(unsigned int seed_value);
 void set_utility_error_std_dev(double std_dev);
