@@ -272,7 +272,19 @@ def initialise_and_personalise_activities(df):
     return activities_array, max_num_activities
 
 
-def initialize_utility():
+# ── Utility parameter set ─────────────────────────────────────────────────────
+# Every run uses DEFAULT_PARAM_SET unless a caller passes param_set= explicitly.
+# There is deliberately NO environment-variable override: a stray SCHED_PARAMS in
+# a shell profile would have changed every result silently, leaving no trace in the
+# file, the diff, or the output. Anything but the default now has to be typed at
+# the point of use, and run_population.py records what was used in the run log and
+# the manifest, so which parameters produced a set of results is a fact you can
+# check afterwards rather than something you have to remember.
+DEFAULT_PARAM_SET = "oasis_t12"
+PARAM_SETS = ("oasis_t12", "wang_a1")
+
+
+def initialize_utility(param_set=None):
     """Initialize utility parameters correctly mapped to actual data groups.
 
         Actual data group mapping (from activities_list_per_pid.csv):
@@ -313,14 +325,81 @@ def initialize_utility():
     # have made "business" coeffs the same as "errands" coeffs
     # have used Leisure params from the paper in 6: depot, cos not sure what else to do there
 
-    asc = [0, 10.6, 16.1, 11.3, 17.4, 12, 16.1, 6.76, 0]
-    early = [0, -1.37, -1.73, -2.51, -2.56, -0.031, -1.73, -2.55, 0]
-    late = [0, -0.79, -3.42, -0.993, -1.54, -1.58, -3.42, -0.578, -0.61]
-    long = [0, -0.201, -0.597, -0.133, -0.0783, -0.209, -0.597, -0.0267, -0.24]
-    short = [0, -4.78, -5.63, 0.528, -0.783, -0.00764, -5.63, 0.134, -0.61]
-    # short = [0, -4.78, -5.63, -0.528, -0.783, -0.00764, -5.63, -0.134, -0.61]
+    # ---------------------------------------------------------------------
+    # Two parameter sets. oasis_t12 is the one in use; wang_a1 is kept for the
+    # sensitivity comparison and has to be asked for by name.
+    #
+    # Index order is the C group order:
+    #   0 home  1 work  2 business  3 shop/visit  4 education
+    #   5 depot  6 delivery/errands  7 escort/other  8 service_station
+    # ---------------------------------------------------------------------
 
-    return {"asc": asc, "early": early, "late": late, "long": long, "short": short}
+    # (a) Wang et al. (2025) Table A.1 -- what this model used originally.
+    #     These descend from OASIS (Pougala et al. 2023) Table 10, the
+    #     *empirical choice set benchmark*, whose short-duration penalties the
+    #     OASIS authors themselves call counter-intuitive: theta_short is
+    #     POSITIVE for shopping (+0.528) and escort (+0.134), i.e. the model is
+    #     rewarded for cutting those activities short. Table 10 fit: rho-bar^2 = 0.54.
+    wang_a1 = {
+        "asc":   [0, 10.6, 16.1, 11.3, 17.4, 12, 16.1, 6.76, 0],
+        "early": [0, -1.37, -1.73, -2.51, -2.56, -0.031, -1.73, -2.55, 0],
+        "late":  [0, -0.79, -3.42, -0.993, -1.54, -1.58, -3.42, -0.578, -0.61],
+        "long":  [0, -0.201, -0.597, -0.133, -0.0783, -0.209, -0.597, -0.0267, -0.24],
+        "short": [0, -4.78, -5.63, 0.528, -0.783, -0.00764, -5.63, 0.134, -0.61],
+    }
+
+    # (b) OASIS (Pougala et al. 2023) Table 12 -- the OASIS activity-specific
+    #     model. Best fit of the three reported (rho-bar^2 = 0.62 vs 0.54 for
+    #     Table 10 and 0.013 for Table 9) and every sign behaviourally sensible.
+    #
+    #     Table 12 estimates only four activities, so the four groups it does not
+    #     cover are mapped to their nearest neighbour WITHIN the same model rather
+    #     than borrowed from another table -- these parameters are jointly
+    #     estimated and trade off against each other, so mixing fits would give a
+    #     vector that was never estimated:
+    #       business          -> work      (a fixed work-side commitment)
+    #       delivery/errands  -> shopping  (discretionary out-of-home errand)
+    #       escort/other      -> leisure   (short, timing-flexible; also holds
+    #                                       'pt interaction', the commonest type)
+    #       depot             -> leisure   (as the original mapping already did)
+    #     service_station keeps Wang et al. Table A.2, which is specified by
+    #     flexibility level and has no Table 12 equivalent.
+    #
+    #     CAVEAT: all OASIS tables are estimated on 236 full-time students in
+    #     Lausanne. Transferring them to a general Sheffield adult population is a
+    #     limitation of any of these choices, not a reason to prefer one.
+    oasis_t12 = {
+        "asc":   [0, 13.1, 13.1, 10.5, 18.7, 8.74, 10.5, 8.74, 0],
+        "early": [0, -0.619, -0.619, -1.01, -1.35, -0.0996, -1.01, -0.0996, 0.0],
+        "late":  [0, -0.338, -0.338, -0.858, -1.63, -0.239, -0.858, -0.239, -0.61],
+        "long":  [0, -1.22, -1.22, -0.683, -1.14, -0.08, -0.683, -0.08, -0.24],
+        "short": [0, -0.932, -0.932, -1.81, -1.75, -0.101, -1.81, -0.101, -0.61],
+    }
+
+    import os
+    if os.environ.get("SCHED_PARAMS"):
+        # This used to select the parameter set. It no longer does anything, and
+        # failing here is the point: someone with it still set in their shell would
+        # otherwise get oasis_t12 results while believing they had chosen something.
+        raise RuntimeError(
+            "SCHED_PARAMS is set but no longer does anything. The parameter set is "
+            "chosen in code (DEFAULT_PARAM_SET) or with run_population.py --params. "
+            "Unset it: `unset SCHED_PARAMS`.")
+
+    chosen = param_set or DEFAULT_PARAM_SET
+    tables = {"wang_a1": wang_a1, "oasis_t12": oasis_t12}
+    if chosen not in tables:
+        raise ValueError(
+            f"Unknown parameter set {chosen!r}. Available: {sorted(tables)}")
+    table = tables[chosen]
+    asc, early, late = table["asc"], table["early"], table["late"]
+    long, short = table["long"], table["short"]
+
+    # The name travels with the numbers. run_population.py stamps it into the run
+    # log and the manifest; check_population_output.py refuses a run whose stamp is
+    # not the set it was told to expect.
+    return {"asc": asc, "early": early, "late": late, "long": long,
+            "short": short, "param_set": chosen}
 
 
 # ===== Main Execution =====

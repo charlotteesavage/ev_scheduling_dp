@@ -18,21 +18,27 @@ Output (in testing_latest/population_results/):
 
 import argparse
 import hashlib
+import json
 import multiprocessing as mp
 import random
 import subprocess
 import sys
 import time
 from ctypes import CDLL, POINTER, c_char, c_double, c_int
+from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 # Make testing_check importable from any working directory
 sys.path.insert(0, str(Path(__file__).parent))
 from testing_check import (
     HORIZON, SPEED, TIME_INTERVAL, TRAVEL_TIME_PENALTY,
     Activity, Label,
+    DEFAULT_PARAM_SET, PARAM_SETS,
     compile_code, extract_schedule, initialize_utility,
 )
 
@@ -44,7 +50,8 @@ RESULTS_DIR  = REPO_ROOT / "testing_latest" / "population_results"
 # Each worker loads these once in worker_init(); they persist for the lifetime
 # of the worker process so the .so is not reloaded per person.
 _lib      = None
-_pid_data = None   # dict: pid (str) → per-person DataFrame
+_pid_data  = None   # dict: pid (str) → (start_row, end_row) into _pid_frame
+_pid_frame = None   # one pid-sorted DataFrame holding every person's activities
 _soc_mix  = None   # SocMixture: per-person initial SoC draw
 _skim     = None   # TravelSkim, or None for straight-line distance
 
@@ -60,6 +67,7 @@ def _setup_lib(lib):
     lib.main.argtypes            = [c_int, POINTER(POINTER(c_char))]
     lib.main.restype             = c_int
     lib.get_final_schedule.restype = POINTER(Label)
+    lib.get_count.restype        = c_int
     lib.free_bucket.restype      = None
     lib.set_random_seed.argtypes = [c_int]
     lib.set_random_seed.restype  = None
@@ -80,7 +88,7 @@ def worker_init(lib_path: str, data_path: str, params: dict, soc_mix=None,
     Loads the shared library, sets constant parameters, and indexes the
     prepared activity data so per-person lookups are O(1).
     """
-    global _lib, _pid_data, _soc_mix, _skim
+    global _lib, _pid_data, _pid_frame, _soc_mix, _skim
 
     _soc_mix = soc_mix
 
@@ -97,22 +105,193 @@ def worker_init(lib_path: str, data_path: str, params: dict, soc_mix=None,
     _lib = CDLL(lib_path)
     _setup_lib(_lib)
 
-    # Pre-build ctypes arrays for utility parameters (same for all persons)
-    c = {k: (c_double * len(v))(*v) for k, v in params.items()}
+    # Pre-build ctypes arrays for utility parameters (same for all persons).
+    # params also carries "param_set", the name of the set these numbers came from;
+    # it is metadata for the run log, not a coefficient vector, so it is skipped here.
+    c = {k: (c_double * len(v))(*v) for k, v in params.items()
+         if k != "param_set"}
     _lib.set_general_parameters(
         HORIZON, SPEED, TRAVEL_TIME_PENALTY, TIME_INTERVAL,
         c["asc"], c["early"], c["late"], c["long"], c["short"],
     )
     _lib.set_utility_error_std_dev(c_double(1.0))
 
-    # Load prepared data and index by pid for fast per-person lookup
-    try:
-        df = pd.read_parquet(data_path)
-    except Exception:
-        df = pd.read_csv(data_path, low_memory=False)
+    # Load prepared data and index by pid for fast per-person lookup.
+    #
+    # This reads the COMPACT file main() builds, not the raw prepared data. Doing
+    # the sort and the dtype narrowing here instead cost about 800 MB of resident
+    # memory per worker: the intermediate copies (sort, then one copy per column
+    # cast) push the heap up to that mark, and the allocator does not hand the
+    # space back once the frame shrinks to its real 66 MB. Reading a file that is
+    # already sorted and already narrow never creates those copies, so a worker
+    # settles at roughly 240 MB instead. With several workers that difference is
+    # the difference between a run that fits in memory and one that does not.
+    table = pq.read_table(data_path)
 
-    _pid_data = {pid: grp.reset_index(drop=True)
-                 for pid, grp in df.groupby("pid")}
+    # Row offsets per person. The pid column is dictionary-encoded in the compact
+    # file, so the run boundaries can be found from the integer codes -- turning
+    # all 950k pids into Python strings just to group them would itself cost more
+    # than the frame does.
+    pid_col = table.column("pid").combine_chunks()
+    if pa.types.is_dictionary(pid_col.type):
+        codes = pid_col.indices.to_numpy(zero_copy_only=False)
+        values = pid_col.dictionary.to_pylist()
+        starts = np.flatnonzero(np.r_[True, codes[1:] != codes[:-1]])
+        ends = np.r_[starts[1:], len(codes)]
+        pid_at_start = [values[c] for c in codes[starts]]
+    else:
+        pid_values = pid_col.to_numpy(zero_copy_only=False)
+        starts = np.flatnonzero(np.r_[True, pid_values[1:] != pid_values[:-1]])
+        ends = np.r_[starts[1:], len(pid_values)]
+        pid_at_start = list(pid_values[starts])
+    # A person's rows have to be contiguous for a row range to describe them. That
+    # holds by construction for the compact file (it is written sorted by pid), but
+    # if some other file were passed here a split person would silently lose every
+    # block of activities but the last — a wrong schedule, not an error.
+    if len(set(pid_at_start)) != len(pid_at_start):
+        raise ValueError(
+            f"{data_path} is not grouped by pid: some person's rows are split "
+            "across the file. Pass the prepared data file and let main() build "
+            "the compact copy, rather than pointing workers at a file directly.")
+    _pid_data = dict(zip(pid_at_start, zip(starts, ends)))
+    del pid_col
+
+    # pid itself is not needed downstream -- run_one_person addresses people by row
+    # offset -- and as plain strings it would be the single largest column.
+    table = table.drop_columns(["pid"])
+
+    # self_destruct releases each Arrow column as soon as pandas has taken it over,
+    # so the two representations are never both fully resident.
+    _pid_frame = table.to_pandas(split_blocks=True, self_destruct=True)
+    del table
+
+
+# ── Compact dataset ───────────────────────────────────────────────────────────
+# Every worker loads the whole activity table, so its size is multiplied by the
+# worker count. Preparing it once, on disk, in the shape the workers actually want
+# means they can load it without building any intermediate copies.
+
+COMPACT_SUFFIX = ".compact.parquet"
+
+
+def compact_path_for(data_path: Path) -> Path:
+    """Where the compact copy of `data_path` lives (beside the original)."""
+    return data_path.with_name(data_path.stem + COMPACT_SUFFIX)
+
+
+def _write_compact(src: str, dst: str):
+    """
+    Write a sorted, narrowed copy of the prepared data.
+
+    Three changes, all of which save the workers memory rather than disk:
+      - sorted by pid, so a worker can index people by row range instead of
+        building a dict of 127k small frames
+      - int64 -> int32 for every integer column (ids, 5-minute intervals and 0/1
+        flags; none of them need 64 bits)
+      - strings dictionary-encoded, which is what makes pid cheap to group on and
+        act_type cost ~1 MB instead of ~60 MB
+
+    Run in its own process by build_compact(): the sort needs about 600 MB, and
+    doing it here means that memory goes back to the operating system when the
+    process exits rather than sitting in the parent for the rest of the run.
+    """
+    src, dst = Path(src), Path(dst)
+    if src.suffix == ".parquet":
+        table = pq.read_table(src)
+    else:
+        table = pa.Table.from_pandas(
+            pd.read_csv(src, low_memory=False), preserve_index=False)
+
+    table = table.sort_by("pid")
+
+    columns, names = [], []
+    for field in table.schema:
+        col = table.column(field.name)
+        if pa.types.is_int64(field.type) or pa.types.is_uint64(field.type):
+            col = col.cast(pa.int32())
+        elif pa.types.is_string(field.type) or pa.types.is_large_string(field.type):
+            col = col.dictionary_encode()
+        columns.append(col)
+        names.append(field.name)
+
+    tmp = dst.with_suffix(".tmp")
+    pq.write_table(pa.table(columns, names=names), tmp, compression="zstd")
+    tmp.replace(dst)   # atomic: an interrupted build cannot leave a half-written
+                       # file that the next run would happily load
+
+
+def build_compact(data_path: Path) -> Path:
+    """
+    Return the compact copy of `data_path`, building it if it is missing or stale.
+
+    Staleness is by modification time, so re-running prepare_sheffield_data.py
+    automatically invalidates it and no one has to remember to delete anything.
+    """
+    dst = compact_path_for(data_path)
+    if dst.exists() and dst.stat().st_mtime >= data_path.stat().st_mtime:
+        return dst
+
+    print(f"Building compact copy of {data_path.name} (one-off, ~30 s)...")
+    t0 = time.time()
+    proc = mp.Process(target=_write_compact, args=(str(data_path), str(dst)))
+    proc.start()
+    proc.join()
+    if proc.exitcode != 0 or not dst.exists():
+        raise SystemExit(
+            f"Failed to build {dst.name} (exit code {proc.exitcode}).")
+    print(f"        {dst.name}  {dst.stat().st_size / 1e6:.0f} MB  "
+          f"in {time.time() - t0:.1f}s")
+    return dst
+
+
+# ── Run manifest ──────────────────────────────────────────────────────────────
+
+def write_manifest(out_dir: Path, suffix: str, args, params, data_path: Path,
+                   n_persons: int, n_workers: int):
+    """
+    Record what produced a set of results, beside the results themselves.
+
+    A schedules file on its own says nothing about which utility parameters, which
+    travel backend or which initial-SoC mixture made it, and those are exactly the
+    things that move the headline numbers -- switching the parameter set alone took
+    charging participation from 2.6% to 8.1% on an otherwise identical population.
+    Written before the DP starts, so it exists even for a run that is later killed.
+
+    Includes the git commit and whether the tree was dirty. A dirty tree means the
+    commit does not fully describe the code that ran, which is worth knowing when a
+    result is surprising months later.
+    """
+    def git(*cmd):
+        try:
+            return subprocess.run(["git", *cmd], cwd=Path(__file__).parent,
+                                  capture_output=True, text=True, timeout=5,
+                                  check=True).stdout.strip()
+        except (subprocess.SubprocessError, OSError):
+            return None
+
+    manifest = {
+        "written_at":      datetime.now().astimezone().isoformat(timespec="seconds"),
+        "tag":             args.tag,
+        "param_set":       params["param_set"],
+        "param_set_is_default": params["param_set"] == DEFAULT_PARAM_SET,
+        "utility_parameters": {k: v for k, v in params.items() if k != "param_set"},
+        "data_file":       str(data_path),
+        "travel_backend":  args.travel,
+        "persons":         n_persons,
+        "workers":         n_workers,
+        "initial_soc": {
+            "home_mean": args.home_soc_mean, "home_std": args.home_soc_std,
+            "nohome_mean": args.nohome_soc_mean, "nohome_std": args.nohome_soc_std,
+        },
+        "limit":           args.limit,
+        "resume":          args.resume,
+        "git_commit":      git("rev-parse", "HEAD"),
+        "git_dirty":       bool(git("status", "--porcelain")),
+        "command":         " ".join(sys.argv),
+    }
+    path = out_dir / f"manifest{suffix}.json"
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+    return path
 
 
 # ── Per-person DP run ─────────────────────────────────────────────────────────
@@ -221,7 +400,8 @@ def run_one_person(pid: str) -> dict:
     """
     t0 = time.perf_counter()
     try:
-        df = _pid_data[pid]
+        lo, hi = _pid_data[pid]
+        df = _pid_frame.iloc[lo:hi].reset_index(drop=True)
         arr, n_acts = _make_activities_array(df)
 
         _lib.set_activities(arr, n_acts)
@@ -263,6 +443,10 @@ def run_one_person(pid: str) -> dict:
         _lib.set_fixed_initial_soc(c_double(initial_soc))
 
         _lib.main(0, None)
+        # How many DSSR refinement rounds this person needed. main.c caps this at
+        # MAX_DSSR_ITERATIONS (200); a person coming back at the cap means the loop
+        # gave up and the schedule may still repeat an activity group.
+        dssr_rounds = int(_lib.get_count())
         best = _lib.get_final_schedule()
 
         if not best:
@@ -286,6 +470,7 @@ def run_one_person(pid: str) -> dict:
             "has_home_charger": has_hc,
             "legs_routed":    routed,
             "legs_approx":    approximated,
+            "dssr_rounds":    dssr_rounds,
             "time_ms":        (time.perf_counter() - t0) * 1e3,
         }
     except Exception as exc:
@@ -318,6 +503,24 @@ def main():
                              "(default: all persons)")
     parser.add_argument("--data",    type=Path, default=DEFAULT_DATA,
                         help="Path to prepared activities file (.parquet or .csv)")
+    # Output naming. Without this every scenario writes schedules.parquet and
+    # run_log.csv into the same directory, so a sweep silently overwrites itself
+    # and only the last scenario survives.
+    parser.add_argument("--out-dir", type=Path, default=RESULTS_DIR, metavar="DIR",
+                        help="Directory for schedules and run log "
+                             "(default: %(default)s)")
+    parser.add_argument("--resume", action="store_true",
+                        help="Skip persons already present in this tag's part files. "
+                             "Lets a run that died partway (crash, power loss) pick up "
+                             "where it stopped instead of starting over.")
+    parser.add_argument("--flush-every", type=int, default=10000, metavar="N",
+                        help="Write completed schedules to a part file every N persons "
+                             "(default: %(default)s). Bounds both peak memory and how "
+                             "much work a crash can destroy.")
+    parser.add_argument("--tag", type=str, default=None, metavar="NAME",
+                        help="Suffix for output filenames, e.g. --tag hc10 writes "
+                             "schedules_hc10.parquet and run_log_hc10.csv. Give each "
+                             "scenario its own tag or they overwrite each other.")
     # Initial-SoC mixture. Overnight charging is an initial condition here, not an
     # activity, so home-charger owners wake up near full and everyone else does not.
     parser.add_argument("--home-soc-mean", type=float, default=0.95, metavar="M",
@@ -332,6 +535,13 @@ def main():
     parser.add_argument("--nohome-soc-std", type=float, default=0.10, metavar="S",
                         help="Std dev of initial SoC without a home charger "
                              "(default: %(default)s)")
+    # Utility parameters. Defaults to DEFAULT_PARAM_SET in testing_check.py, which
+    # is oasis_t12. Anything else has to be typed here and is recorded in the run
+    # log and the manifest, so no set of results is ever ambiguous about which
+    # coefficients produced it.
+    parser.add_argument("--params", choices=list(PARAM_SETS), default=DEFAULT_PARAM_SET,
+                        help="Utility parameter set (default: %(default)s). Only "
+                             "change this for a deliberate sensitivity comparison.")
     parser.add_argument("--travel", choices=["none", "euclidean", "detour", "route"],
                         default="none", metavar="BACKEND",
                         help="Travel distance/time source (default: %(default)s). "
@@ -369,8 +579,11 @@ def main():
         )
 
     lib_path  = compile_code()
-    params    = initialize_utility()
+    params    = initialize_utility(args.params)
     n_workers = args.workers or default_workers()
+
+    # Workers load this, not data_path — see build_compact() for why.
+    compact_path = build_compact(data_path)
 
     # Read just the pid column to get the full list cheaply
     try:
@@ -388,6 +601,9 @@ def main():
     )
 
     print(f"Persons: {len(pids):,}  |  Workers: {n_workers}  |  Data: {data_path.name}")
+    print(f"Utility parameters: {params['param_set']}"
+          + ("" if params["param_set"] == DEFAULT_PARAM_SET
+             else "   ** NOT the default — this is a sensitivity run **"))
     print(f"Initial SoC: home charger N({soc_mix.home_mean}, {soc_mix.home_std}) | "
               f"no home charger N({soc_mix.nohome_mean}, {soc_mix.nohome_std}) "
               f"[clamped to 0-1]")
@@ -428,11 +644,67 @@ def main():
     else:
         print("Travel: straight-line distance at a flat speed (no skim)")
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir = args.out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    suffix = f"_{args.tag}" if args.tag else ""
+
+    # Part files. Writing incrementally means a crash costs at most --flush-every
+    # persons instead of the whole run, and the parent never holds all 127k
+    # schedules at once (that alone was ~0.85 GB at the end of a full run).
+    parts_dir = out_dir / f"parts{suffix}"
+    parts_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = write_manifest(out_dir, suffix, args, params, data_path,
+                                   len(pids), n_workers)
+    print(f"Manifest   → {manifest_path}")
+
+    done_pids = set()
+    if args.resume:
+        for f in sorted(parts_dir.glob("schedules_*.parquet")):
+            try:
+                done_pids.update(pd.read_parquet(f, columns=["pid"])["pid"].unique())
+            except Exception as exc:
+                print(f"  ignoring unreadable part {f.name}: {exc}")
+        if done_pids:
+            before = len(pids)
+            pids = [p for p in pids if p not in done_pids]
+            print(f"Resuming: {len(done_pids):,} persons already done, "
+                  f"{len(pids):,} of {before:,} left to run")
+        else:
+            print("Resuming: no completed parts found, starting from the beginning")
 
     schedules  = []
     log_rows   = []
+    # Counted as results arrive, not from log_rows: flush() drains that list, so
+    # summing it at the end reported 0 succeeded on any run that flushed.
+    n_success  = 0
+    part_no    = len(list(parts_dir.glob("schedules_*.parquet")))
     t_start    = time.time()
+
+    log_path = out_dir / f"run_log{suffix}.csv"
+    log_written = args.resume and log_path.exists()
+
+    def flush(force=False):
+        """
+        Write buffered schedules to a part file and append the matching log rows.
+
+        The log is appended here rather than only at the end because a crash used to
+        take every per-person diagnostic with it (timing, initial SoC, DSSR rounds)
+        even though the schedules themselves had already been parted out safely.
+        """
+        nonlocal schedules, part_no, log_rows, log_written
+        if not schedules or (not force and len(schedules) < args.flush_every):
+            return
+        pd.concat(schedules, ignore_index=True).to_parquet(
+            parts_dir / f"schedules_{part_no:04d}.parquet", index=False)
+        part_no += 1
+        schedules = []
+        if log_rows:
+            pd.DataFrame(log_rows).to_csv(
+                log_path, mode="a" if log_written else "w",
+                header=not log_written, index=False)
+            log_written = True
+            log_rows = []
 
     # tqdm is optional — fall back to plain counting if not installed
     try:
@@ -444,11 +716,15 @@ def main():
     with mp.Pool(
         processes=n_workers,
         initializer=worker_init,
-        initargs=(lib_path, str(data_path), params, soc_mix, args.travel),
+        initargs=(lib_path, str(compact_path), params, soc_mix, args.travel),
     ) as pool:
         for result in pool.imap_unordered(run_one_person, pids, chunksize=50):
             log_rows.append({
                 "pid":            result["pid"],
+                # Stamped per row so a log can never be separated from the
+                # parameters that produced it, however it is later filtered,
+                # concatenated or resumed.
+                "param_set":      params["param_set"],
                 "success":        result["success"],
                 "n_acts_in":      result.get("n_acts_in"),
                 "n_acts_out":     result.get("n_acts_out"),
@@ -458,11 +734,14 @@ def main():
                 "has_home_charger": result.get("has_home_charger"),
                 "legs_routed":    result.get("legs_routed"),
                 "legs_approx":    result.get("legs_approx"),
+                "dssr_rounds":    result.get("dssr_rounds"),
                 "time_ms":        result.get("time_ms"),
                 "error":          result.get("error", ""),
             })
             if result["success"]:
+                n_success += 1
                 schedules.append(result["schedule"])
+                flush()
             if progress is not None:
                 progress.update(1)
 
@@ -470,25 +749,35 @@ def main():
         progress.close()
 
     elapsed  = time.time() - t_start
-    n_ok     = sum(r["success"] for r in log_rows)
+    n_ok     = n_success
     print(f"\nCompleted: {n_ok:,}/{len(pids):,} succeeded "
           f"in {elapsed:.1f} s  ({elapsed / max(len(pids), 1) * 1e3:.1f} ms/person)")
 
     # ── Save schedules ────────────────────────────────────────────────────────
-    if schedules:
-        all_sched = pd.concat(schedules, ignore_index=True)
+    flush(force=True)
+    part_files = sorted(parts_dir.glob("schedules_*.parquet"))
+    if part_files:
+        sched_path = out_dir / f"schedules{suffix}.parquet"
+        # Streamed part by part rather than pd.concat'd. The concat held every
+        # schedule in the population in memory at once (about 0.9 GB for a full
+        # run) purely to write them straight back out again — and it did it at the
+        # very end, after hours of work, where running out of memory costs the most.
+        writer = None
         try:
-            sched_path = RESULTS_DIR / "schedules.parquet"
-            all_sched.to_parquet(sched_path, index=False)
-        except ImportError:
-            sched_path = RESULTS_DIR / "schedules.csv"
-            all_sched.to_csv(sched_path, index=False)
-        print(f"Schedules  → {sched_path}")
+            for f in part_files:
+                part = pq.read_table(f)
+                if writer is None:
+                    writer = pq.ParquetWriter(sched_path, part.schema)
+                writer.write_table(part)
+                del part
+        finally:
+            if writer is not None:
+                writer.close()
+        print(f"Schedules  → {sched_path}  ({len(part_files)} part files kept in "
+              f"{parts_dir.name}/ — delete once you have the combined file)")
 
     # ── Save run log ──────────────────────────────────────────────────────────
-    log_df   = pd.DataFrame(log_rows)
-    log_path = RESULTS_DIR / "run_log.csv"
-    log_df.to_csv(log_path, index=False)
+    log_df = pd.read_csv(log_path) if log_path.exists() else pd.DataFrame(log_rows)
     print(f"Run log    → {log_path}")
 
     # Brief summary statistics
@@ -511,6 +800,11 @@ def main():
                 print(f"\nTravel legs            : {total:,.0f} "
                       f"({routed / total:.1%} from the {args.travel} source, "
                       f"{approx / total:.1%} approximated)")
+
+    if n_ok > 0 and log_df["dssr_rounds"].notna().any():
+        hit = int((log_df["dssr_rounds"] >= 200).sum())
+        print(f"Max DSSR rounds        : {int(log_df['dssr_rounds'].max())}"
+              + (f"   ** {hit:,} persons hit the cap **" if hit else "   (cap never bound)"))
 
     if n_ok < len(pids):
         failures = log_df[~log_df["success"]]

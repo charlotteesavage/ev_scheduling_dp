@@ -10,6 +10,9 @@
 #include "scheduling.h"
 #include "utils.h"
 
+// Maximum DSSR refinement rounds before giving up (see the loop in main()).
+#define MAX_DSSR_ITERATIONS 200
+
 
 int main(int argc, char *argv[])
 {
@@ -37,19 +40,20 @@ int main(int argc, char *argv[])
     L_list *li = &bucket[horizon - 1][max_num_activities - 1]; // li points to last element of bucket (pointer of pointer)
                                                            // ie la liste de label ou la journee est finie par la derniere activitee DUSK
 
+    // Safety cap on the DSSR loop. Without it a person whose best solution never
+    // becomes elementary loops forever, and in a population run that stalls a whole
+    // worker process with no way to notice. The measured maximum is 21 rounds over a
+    // 3,000-person sample, so 200 sits well clear of normal behaviour while still
+    // being finite. If it ever does bind, DSSR_count comes back as
+    // MAX_DSSR_ITERATIONS and the caller can see that the schedule may still
+    // contain a repeated activity group.
     DSSR_count = 0;
-    while (DSSR(find_best(li, 0)))
+    while (DSSR_count < MAX_DSSR_ITERATIONS && DSSR(find_best(li, 0)))
     { // detect cycles in the current best solution
-        // while(DSSR_count < 10 && DSSR(find_best(li, 1))){
-        // printf("\n While loop");
         free_bucket();
         create_bucket(horizon, max_num_activities);
         DP();
         DSSR_count++;
-        // if(DSSR_count >= 40){  // If we've reached the maximum count, break out of the loop
-        //     printf("\n Maximum DSSR_count reached.");
-        //     break;
-        // }
         li = &bucket[horizon - 1][max_num_activities - 1];
     };
 

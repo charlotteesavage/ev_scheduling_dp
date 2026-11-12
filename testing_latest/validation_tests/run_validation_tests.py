@@ -14,6 +14,10 @@ from testing_check import (
 
 # Mirrors of values that are hard-coded in src/scheduling.c and cannot be set
 # from Python. Used by the brute-force optimality check below.
+# Hours per time interval: the timing coefficients are per hour (see
+# deviation_in_coefficient_units() in src/scheduling.c).
+DEVIATION_UNITS = 5 / 60.0
+
 THETA_SOC = -80.0
 SOC_THRESHOLD = 0.3
 ENERGY_CONSUMPTION_RATE = 0.2   # kWh per km
@@ -382,16 +386,19 @@ def _path_utility(path, acts, n, params, start_soc, travel):
         utility += params["asc"][cur_group]
         utility += TRAVEL_TIME_PENALTY * travel_intervals
 
+        # Deviations are converted to the units the coefficients are quoted in,
+        # matching deviation_in_coefficient_units() in src/scheduling.c. Hours by
+        # default; set DEVIATION_UNITS = TIME_INTERVAL for the legacy per-minute form.
         if prev_group != 0 and not int(prev_act["is_service_station"]):
-            utility += params["short"][prev_group] * TIME_INTERVAL * max(
+            utility += params["short"][prev_group] * DEVIATION_UNITS * max(
                 0, int(prev_act["des_duration"]) - prev_duration)
-            utility += params["long"][prev_group] * TIME_INTERVAL * max(
+            utility += params["long"][prev_group] * DEVIATION_UNITS * max(
                 0, prev_duration - int(prev_act["des_duration"]))
 
         if cur_group != 0 and not int(cur_act["is_service_station"]):
-            utility += params["early"][cur_group] * TIME_INTERVAL * max(
+            utility += params["early"][cur_group] * DEVIATION_UNITS * max(
                 0, int(cur_act["des_start_time"]) - cur_start)
-            utility += params["late"][cur_group] * TIME_INTERVAL * max(
+            utility += params["late"][cur_group] * DEVIATION_UNITS * max(
                 0, cur_start - int(cur_act["des_start_time"]))
 
         # SoC anxiety, which dawn and dusk are exempt from.
@@ -555,6 +562,14 @@ def run_test(lib, csv_file, start_battery):
     activities_array, num_activities = initialise_and_personalise_activities(activities)
     params = initialize_utility()
 
+    # The optimality fixtures are the one place we need provable optimality, so
+    # turn on the exact duration-aware dominance rule here. It is off by default
+    # because it is ~157x slower -- see set_exact_duration_dominance() in
+    # src/scheduling.c.
+    if hasattr(lib, "set_exact_duration_dominance"):
+        lib.set_exact_duration_dominance(c_int(1))
+    if hasattr(lib, "set_soc_dominance_buckets"):
+        lib.set_soc_dominance_buckets(c_int(0))   # exact SoC comparison
     lib.set_fixed_initial_soc(c_double(start_battery))
     lib.set_utility_error_std_dev(c_double(0.0))
     lib.set_random_seed(c_int(42))

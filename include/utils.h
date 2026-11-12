@@ -14,6 +14,7 @@ void recursive_print(Label *L);
 // Memory management functions
 void create_bucket(int a, int b);
 void free_bucket(void);
+void delete_group(Group_mem *L);
 // void free_activity_memories(void);
 
 // Group memory manipulation functions

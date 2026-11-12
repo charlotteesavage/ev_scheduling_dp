@@ -697,6 +697,122 @@ static int is_feasible(Label *L, Activity *a)
     1 = L1 dominates by default because L2 is NULL
     2 = L1 dominates L2 based on the criteria */
 
+// Defined further down, next to the timing-units flag it reads.
+static double deviation_in_coefficient_units(double intervals);
+
+/*  The short/long penalty an activity owes for a stay of `duration` intervals.
+    Zero for home/dawn/dusk (group 0) and service stations, which are exempt. */
+static double duration_penalty(Activity *a, int duration)
+{
+    if (a->group == 0 || a->is_service_station)
+    {
+        return 0.0;
+    }
+    return short_parameters[a->group] *
+               deviation_in_coefficient_units(fmax(0, a->des_duration - duration)) +
+           long_parameters[a->group] *
+               deviation_in_coefficient_units(fmax(0, duration - a->des_duration));
+}
+
+/*  The most that a label sitting at `a` with duration d2 could still gain over one
+    with duration d1, counting only the duration penalty they have yet to pay.
+
+    Both labels are at the same activity at the same time, so if they each stay k
+    more intervals they exit owing P(d1+k) and P(d2+k). For L1 to dominate we need
+    its utility lead to cover the largest value of P(d2+k) - P(d1+k) over every k.
+
+    P is piecewise linear with a single kink at des_duration, so that maximum is
+    attained at k = 0, at whichever kink is still ahead, or at the longest stay the
+    activity permits. Evaluating those points is exact, not a bound.
+
+    This is what makes dominance safe on duration. The penalty is not paid until a
+    label LEAVES, so two labels in the same (time, activity) cell carry different
+    unpaid debts that `utility` does not show; comparing on utility alone discarded
+    labels that would have finished better. */
+/*  SoC granularity for dominance, as a number of buckets over [0, 1].
+
+    SoC is a continuous resource. Comparing it exactly (`L1->soc >= L2->soc`) is
+    correct but almost never true, so dominance stops firing, label lists grow
+    without bound and both time and memory explode: measured at 24 s and 2.25 GB
+    for a single heavy person, against 32 ms under the old rule.
+
+    Rounding to buckets restores pruning. The cost is a bounded approximation:
+    a label can dominate one with at most 1/soc_dominance_buckets more charge, so
+    the theta_soc term can be wrong by at most |theta_soc| / buckets per activity.
+      0   = exact comparison (correct, unaffordable)
+      200 = 0.5% buckets, worst-case 0.40 utils per activity
+      1000 = 0.1% buckets, worst-case 0.08 utils per activity
+    Set to -1 to ignore SoC entirely, which is what the model did originally. */
+int soc_dominance_buckets = -1;
+
+void set_soc_dominance_buckets(int buckets)
+{
+    soc_dominance_buckets = buckets;
+}
+
+static int soc_allows_dominance(Label *L1, Label *L2)
+{
+    if (soc_dominance_buckets < 0)
+    {
+        return 1; // SoC ignored (legacy behaviour)
+    }
+    if (soc_dominance_buckets == 0)
+    {
+        return L1->current_soc >= L2->current_soc; // exact
+    }
+    double b = (double)soc_dominance_buckets;
+    return floor(L1->current_soc * b) >= floor(L2->current_soc * b);
+}
+
+int exact_duration_dominance = 0;
+
+void set_exact_duration_dominance(int on)
+{
+    exact_duration_dominance = on ? 1 : 0;
+}
+
+static double max_future_duration_advantage(Activity *a, int d1, int d2)
+{
+    /*  Off by default. The condition is exact, but it makes dominance fire so
+        rarely that label lists explode: measured at 1102 ms/person against
+        7 ms with it off -- 157x, or ~19.5 h for the full population at 2 workers.
+        With it off the DP is fast but knowingly slightly suboptimal (the
+        optimality fixtures miss by 0.28 and 0.19 utils).
+
+        Turn it on via set_exact_duration_dominance(1) for validation runs and for
+        any result that has to be provably optimal. */
+    if (!exact_duration_dominance || d1 == d2 || a->group == 0 ||
+        a->is_service_station)
+    {
+        return 0.0;
+    }
+
+    int candidates[4];
+    int n = 0;
+    candidates[n++] = 0;
+    if (a->des_duration > d1)
+    {
+        candidates[n++] = a->des_duration - d1;
+    }
+    if (a->des_duration > d2)
+    {
+        candidates[n++] = a->des_duration - d2;
+    }
+    candidates[n++] = a->max_duration;
+
+    double best = -INFINITY;
+    for (int i = 0; i < n; i++)
+    {
+        int k = candidates[i];
+        double g = duration_penalty(a, d2 + k) - duration_penalty(a, d1 + k);
+        if (g > best)
+        {
+            best = g;
+        }
+    }
+    return best;
+}
+
 static int dominates(Label *L1, Label *L2)
 {
     if (L1 == NULL)
@@ -726,10 +842,18 @@ static int dominates(Label *L1, Label *L2)
         if (dom_mem_contains(L1, L2))
         {
 
-            // Exact method v2
-            if (L1->time <= L2->time
-                // && L1->current_soc >= L2->current_soc
-            )
+            /*  Dominance must hold on every resource that constrains the future,
+                not just on utility. Battery is one of them: a label with more
+                utility but less charge may be unable to make a drive the other
+                could, and pays a larger theta_soc penalty at every subsequent
+                activity. Comparing on utility alone discarded such labels.
+
+                (The time test is vacuous -- the bucket cell is keyed by time, so
+                every label in it has the same time -- but it is kept for clarity
+                about what the dominance conditions are.) */
+            if (L1->time <= L2->time && soc_allows_dominance(L1, L2) &&
+                (L1->utility - L2->utility) >=
+                    max_future_duration_advantage(L1->act, L1->duration, L2->duration))
             {
                 return 2;
             }
@@ -753,6 +877,38 @@ static int dominates(Label *L1, Label *L2)
     }
     return 0;
 };
+
+/*  Units for the timing/duration penalty coefficients.
+
+    early/late/long/short are transcribed from Wang et al. (2025) Table A.1, which
+    inherits the OASIS specification (Pougala et al.). Neither paper states whether
+    the deviation term is in hours or minutes, and it matters by a factor of 60.
+
+    The evidence points to hours: the estimated ASCs run 1.9-17.4, which is the
+    natural scale for a logit whose error term has sd ~1.28, and an hour's deviation
+    priced in minutes would be hundreds of utils -- large enough to make choice
+    deterministic and the model unestimable. Billing per minute also made being
+    15 minutes early to work (-20.6) cost twice what working was worth (+10.6).
+
+    Set to 0 to restore the previous per-minute behaviour for a sensitivity run.
+    UNRESOLVED: confirm with the authors before treating either as settled. */
+int timing_coefficients_per_hour = 1;
+
+/*  Converts a deviation expressed in time intervals into the units the timing
+    coefficients are quoted in. */
+static double deviation_in_coefficient_units(double intervals)
+{
+    if (timing_coefficients_per_hour)
+    {
+        return intervals * (double)time_interval / 60.0; // hours
+    }
+    return intervals * (double)time_interval; // minutes (legacy)
+}
+
+void set_timing_coefficients_per_hour(int per_hour)
+{
+    timing_coefficients_per_hour = per_hour ? 1 : 0;
+}
 
 /* Calculate the utility of a label based on its starting activity and the duration of the one that just finished */
 static double update_utility(Label *L)
@@ -796,10 +952,12 @@ static double update_utility(Label *L)
     // PENALTY FOR FINISHING PREVIOUS ACTIVITY (duration deviation)
     if (previous_activity_type != 0 && !previous_act->is_service_station)
     {
-        L->utility += short_parameters[previous_activity_type] * time_interval *
-                      fmax(0, previous_act->des_duration - previous_L->duration);
-        L->utility += long_parameters[previous_activity_type] * time_interval *
-                      fmax(0, previous_L->duration - previous_act->des_duration);
+        L->utility += short_parameters[previous_activity_type] *
+                      deviation_in_coefficient_units(
+                          fmax(0, previous_act->des_duration - previous_L->duration));
+        L->utility += long_parameters[previous_activity_type] *
+                      deviation_in_coefficient_units(
+                          fmax(0, previous_L->duration - previous_act->des_duration));
         if (eps_duration != NULL)
         {
             L->utility += eps_duration[previous_act->base_id];
@@ -809,10 +967,12 @@ static double update_utility(Label *L)
     // Early/late start penalty (timing deviation)
     if (activity_type != 0 && !act->is_service_station)
     {
-        L->utility += early_parameters[activity_type] * time_interval *
-                      fmax(0, act->des_start_time - L->start_time);
-        L->utility += late_parameters[activity_type] * time_interval *
-                      fmax(0, L->start_time - act->des_start_time);
+        L->utility += early_parameters[activity_type] *
+                      deviation_in_coefficient_units(
+                          fmax(0, act->des_start_time - L->start_time));
+        L->utility += late_parameters[activity_type] *
+                      deviation_in_coefficient_units(
+                          fmax(0, L->start_time - act->des_start_time));
         if (eps_start_time != NULL)
         {
             L->utility += eps_start_time[act->base_id];
@@ -1158,18 +1318,14 @@ void DP()
                         // aim: keen the minimum value from L_list
                         // checks the min value in the linked list and retains that one
                         int dom = 0;
-                        L_list *list_1 = &bucket[L1->time][a1];
-                        L_list *list_2 = &bucket[L1->time][a1];
+                        L_list *head = &bucket[L1->time][a1];
+                        L_list *list_1 = head;
 
                         while (list_1 != NULL)
                         {
-
-                            list_2 = list_1;
-
                             // If a label in the bucket is dominated by L1, this label is removed from the list (bucket)
                             if (dominates(L1, list_1->element))
                             {
-                                // printf("\n Dominance \n");
                                 list_1 = remove_label(list_1);
                             }
                             // If L1 is dominated by a label in the bucket, no further comparason is needed for L1 and it's discarded
@@ -1177,7 +1333,14 @@ void DP()
                             {
                                 if (dominates(list_1->element, L1))
                                 {
-                                    // printf("\n Dominance \n");
+                                    // L1 is thrown away here, so its memory list goes
+                                    // with it. Most generated labels lose a dominance
+                                    // test, so leaking these chains was by far the
+                                    // largest source of the run's memory growth.
+                                    if (L1->mem != NULL)
+                                    {
+                                        delete_group(L1->mem);
+                                    }
                                     free(L1);
                                     dom = 1; // (dom = 1) => bucket domine L1
                                     break;   // exit the while
@@ -1189,17 +1352,31 @@ void DP()
                         // si L1 n'est domine par aucun des label de la list du bucket, il faut l'y rajouter
                         if (!dom)
                         {
-                            if (list_2->element == NULL)
+                            /*  Find the tail by walking from the head.
+
+                                This used to reuse the cursor from the loop above, but two of
+                                remove_label()'s branches free() the very node that cursor was
+                                left pointing at -- so appending through it was a use-after-free
+                                whenever the last thing the loop did was remove a non-head node.
+                                The head is part of the bucket array and remove_label() never
+                                frees a node with previous == NULL, so walking from it is safe. */
+                            L_list *tail = head;
+                            while (tail->next != NULL)
                             {
-                                list_2->element = L1;
+                                tail = tail->next;
+                            }
+
+                            if (tail->element == NULL)
+                            {
+                                tail->element = L1;
                             }
                             else
                             { // juste rajoute un label a la fin d'une Label_list
                                 L_list *Ln = malloc(sizeof(L_list));
                                 Ln->element = L1;
-                                list_2->next = Ln;
+                                tail->next = Ln;
                                 Ln->next = NULL;
-                                Ln->previous = list_2;
+                                Ln->previous = tail;
                             }
                         } // end if not dominance
                     } // end if feasible

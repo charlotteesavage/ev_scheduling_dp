@@ -29,9 +29,9 @@ import pandas as pd
 from scipy.spatial import KDTree
 
 # ── Configuration ────────────────────────────────────────────────────────────
-CHARGER_THRESHOLD_M = 500  # activities within this distance of a charger get charging
-# 500 m is the baseline walking distance from a charger to an activity. It was 250 m,
-# which sat far below the median distance to the nearest charger (1,326 m) and left
+CHARGER_THRESHOLD_M = 250  # activities within this distance of a charger get charging
+# 500 m was the baseline walking distance from a charger to an activity.
+# 250 m now, though it sits far below the median distance to the nearest charger (1,326 m) and left
 # only 4.3% of activity locations with any charging access — suppressing baseline
 # charging participation to 1.6% of persons. Participation scales near-proportionally
 # with coverage (~0.14 x coverage), so this constant sets the scale of every
@@ -46,7 +46,7 @@ HORIZON = 288  # 5-min intervals in 24 hours
 # Share of the population with a home charger (1.0 = universal, the old behaviour).
 # Home charging is a property of the dwelling, so it is assigned per PERSON and is
 # constant across all of that person's home activities.
-HOME_CHARGING_SHARE = 1.0
+HOME_CHARGING_SHARE = 0.05
 HOME_CHARGING_SEED = 20260726
 
 

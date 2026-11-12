@@ -189,6 +189,18 @@ void set_fixed_initial_soc(double soc);
 void set_random_seed(unsigned int seed_value);
 void set_utility_error_std_dev(double std_dev);
 
+// Timing/duration coefficient units: 1 = per hour (default), 0 = per minute (legacy).
+extern int timing_coefficients_per_hour;
+void set_timing_coefficients_per_hour(int per_hour);
+
+// Exact (but slow) duration-aware dominance. Off by default; see src/scheduling.c.
+// SoC granularity in dominance: -1 ignore, 0 exact, N = N buckets over [0,1].
+extern int soc_dominance_buckets;
+void set_soc_dominance_buckets(int buckets);
+
+extern int exact_duration_dominance;
+void set_exact_duration_dominance(int on);
+
 // Algorithm functions
 void DP(void);
 int DSSR(Label *L);

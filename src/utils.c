@@ -43,8 +43,8 @@ void create_bucket(int a, int b)
 };
 
 /* recursively free memory associated with a given Group_mem and all its successors */
-// Note: This function is internal to utils.c only
-static void delete_group(Group_mem *L)
+// Public: scheduling.c frees the memory list of labels it discards as dominated.
+void delete_group(Group_mem *L)
 {
     if (L != NULL)
     {
@@ -60,11 +60,15 @@ static void delete_group(Group_mem *L)
 // Note: This function is internal to utils.c only
 static void delete_list(L_list *L)
 {
-    if (L->next != NULL)
-    { // After reaching the last L_list in the list, it begins freeing memory.
-        delete_list(L->next);
-    }
-    // checks if the L_list has a Label (L->element) associated with it. If so, it frees the memory of any Group_mem of the Label too
+    /*  Walk the chain iteratively rather than recursing. Two things matter here:
+
+        - Every node after the head was malloc'd separately (see add_activity in
+          scheduling.c) and has to be free()d, not just emptied. Freeing only the
+          labels left one 24-byte node per stored label behind on every call, and
+          free_bucket() is called once per DSSR round per person, so a population
+          run leaked steadily until the machine ran out of memory.
+        - The head node is part of the bucket[i] array, so it is emptied but never
+          free()d -- free_bucket() releases the array itself afterwards. */
     if (L->element != NULL)
     {
         if (L->element->mem != NULL)
@@ -73,6 +77,22 @@ static void delete_list(L_list *L)
         }
         free(L->element);
         L->element = NULL;
+    }
+    L_list *node = L->next;
+    L->next = NULL;
+    while (node != NULL)
+    {
+        L_list *next = node->next;
+        if (node->element != NULL)
+        {
+            if (node->element->mem != NULL)
+            {
+                delete_group(node->element->mem);
+            }
+            free(node->element);
+        }
+        free(node);
+        node = next;
     }
 };
 
@@ -223,6 +243,13 @@ Group_mem *unionLinkedLists(Group_mem *head1, Group_mem *head2, int pipi)
 /* Removes the label from the provided list of label and adjusts the connections of adjacent labels. */
 L_list *remove_label(L_list *L)
 {
+    // The label owns its memory list outright (unionLinkedLists and copyLinkedList
+    // both allocate fresh nodes), so it has to be freed with the label. Freeing only
+    // the label leaked one Group_mem chain for every label a dominance test removed.
+    if (L->element != NULL && L->element->mem != NULL)
+    {
+        delete_group(L->element->mem);
+    }
     free(L->element);
     L->element = NULL;
     L_list *L_re;
