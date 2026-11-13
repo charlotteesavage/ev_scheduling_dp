@@ -55,7 +55,7 @@ REPO_ROOT = Path(__file__).parent.parent
 OSM_DIR = REPO_ROOT / "Sheffield_Project_model_input" / "routedistance" / "osm"
 DEFAULT_PBF = OSM_DIR / "england-latest.osm.pbf"
 DEFAULT_OUT = OSM_DIR / "road_graph.npz"
-DEFAULT_DATA = REPO_ROOT / "testing_latest" / "sheffield_activities_prepared.parquet"
+DEFAULT_DATA = REPO_ROOT / "testing_latest" / "data" / "sheffield_activities_prepared.parquet"
 
 # Road types included, and the notebook's default speed for each in km/h.
 # Roads carrying an OSM maxspeed tag use that instead; this table only fills gaps.

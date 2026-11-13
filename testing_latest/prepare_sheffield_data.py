@@ -8,7 +8,7 @@ Reads:
   Sheffield_Project_model_input/charging location/charger_location_attributes_dropped_final.csv
 
 Writes:
-  testing_latest/sheffield_activities_prepared.parquet   (or .csv if pyarrow unavailable)
+  testing_latest/data/sheffield_activities_prepared.parquet   (or .csv if pyarrow unavailable)
 
 Run once before population-scale DP runs.
 
@@ -89,7 +89,7 @@ def assign_home_charging(pids, share, seed):
 
 REPO_ROOT = Path(__file__).parent.parent
 DATA_ROOT = REPO_ROOT / "Sheffield_Project_model_input"
-OUT_STEM = REPO_ROOT / "testing_latest" / "sheffield_activities_prepared"
+OUT_STEM = REPO_ROOT / "testing_latest" / "data" / "sheffield_activities_prepared"
 
 ACTS_PATH = (
     DATA_ROOT / "location_expansion" / "activities_long_with_groups_selected.csv"

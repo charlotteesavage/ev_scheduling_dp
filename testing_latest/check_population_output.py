@@ -4,7 +4,7 @@ Check a finished population run for correctness.
 
   python3 testing_latest/check_population_output.py --tag hc1
   python3 testing_latest/check_population_output.py --tag hc1 --dir population_results/latest
-  python3 testing_latest/check_population_output.py --tag hc1 --data sheffield_hc1.parquet
+  python3 testing_latest/check_population_output.py --tag hc1 --data testing_latest/data/sheffield_hc1.parquet
 
 Why this exists
 ---------------
@@ -94,9 +94,9 @@ def main():
 
     data_path = args.data
     if data_path is None:
-        guess = REPO / "testing_latest" / f"sheffield_{args.tag}.parquet"
+        guess = REPO / "testing_latest" / "data" / f"sheffield_{args.tag}.parquet"
         data_path = guess if guess.exists() else \
-            REPO / "testing_latest" / "sheffield_activities_prepared.parquet"
+            REPO / "testing_latest" / "data" / "sheffield_activities_prepared.parquet"
     if not data_path.exists():
         sys.exit(f"Prepared data not found: {data_path}  (pass --data)")
 

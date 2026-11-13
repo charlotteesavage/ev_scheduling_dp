@@ -43,7 +43,7 @@ from testing_check import (
 )
 
 REPO_ROOT    = Path(__file__).parent.parent
-DEFAULT_DATA = REPO_ROOT / "testing_latest" / "sheffield_activities_prepared.parquet"
+DEFAULT_DATA = REPO_ROOT / "testing_latest" / "data" / "sheffield_activities_prepared.parquet"
 RESULTS_DIR  = REPO_ROOT / "testing_latest" / "population_results"
 
 # ── Worker-process global state ───────────────────────────────────────────────

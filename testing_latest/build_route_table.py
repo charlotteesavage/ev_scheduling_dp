@@ -59,7 +59,7 @@ import pandas as pd
 REPO_ROOT = Path(__file__).parent.parent
 OSM_DIR = REPO_ROOT / "Sheffield_Project_model_input" / "routedistance" / "osm"
 DEFAULT_GRAPH = OSM_DIR / "road_graph.npz"
-DEFAULT_DATA = REPO_ROOT / "testing_latest" / "sheffield_activities_prepared.parquet"
+DEFAULT_DATA = REPO_ROOT / "testing_latest" / "data" / "sheffield_activities_prepared.parquet"
 DEFAULT_OUT = REPO_ROOT / "testing_latest" / "skim_cache" / "route_table.npz"
 MMAP_DIR = OSM_DIR / "graph_mmap"
 
